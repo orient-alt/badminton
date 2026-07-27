@@ -534,9 +534,15 @@ function BadmintonTracker() {
     <div
       style={{
         background: TOKENS.bg,
+        minHeight: '100vh',
+      }}
+    >
+    <div
+      style={{
         color: TOKENS.text,
         fontFamily: 'Inter, system-ui, sans-serif',
-        minHeight: '100vh',
+        maxWidth: 1400,
+        margin: '0 auto',
         padding: 20,
       }}
     >
@@ -841,7 +847,14 @@ function BadmintonTracker() {
                 </div>
               </div>
 
-              <div className="grid gap-3 mb-4">
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+                  gap: 14,
+                  marginBottom: 16,
+                }}
+              >
                 {activeSession.rounds.map((r, i) => {
                   const a = Number(r.scoreA),
                     b = Number(r.scoreB);
@@ -1261,6 +1274,7 @@ function BadmintonTracker() {
 
       </>
       )}
+    </div>
     </div>
   );
 }
