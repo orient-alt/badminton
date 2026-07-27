@@ -19,6 +19,8 @@
   .bt-scale-in { animation: bt-pop 300ms ease; }
   @keyframes bt-pop { from { transform: scale(0.9); opacity: 0.4; } to { transform: scale(1); opacity: 1; } }
   .bt-spin { animation: bt-spin 400ms ease; }
+  .bt-live-dot { animation: bt-pulse-dot 1.4s ease-in-out infinite; }
+  @keyframes bt-pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
   @keyframes bt-spin { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }
   .bt-scorebox::-webkit-inner-spin-button, .bt-scorebox::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 </style>
@@ -388,6 +390,16 @@ function BadmintonTracker() {
   const partnerCounts = computePartnerCounts(sessions);
   const standings = computeStandings(players, sessions);
   const topDuo = computeTopDuo(players, sessions);
+  const queueIds = activeSession
+    ? activeSession.attendance.filter((id) => {
+        const busy = activeSession.rounds.some((r) => {
+          const ra = Number(r.scoreA), rb = Number(r.scoreB);
+          const rDecided = r.scoreA !== '' && r.scoreB !== '' && !isNaN(ra) && !isNaN(rb) && ra !== rb;
+          return !rDecided && (r.teamA.includes(id) || r.teamB.includes(id));
+        });
+        return !busy;
+      })
+    : [];
 
   function startSession() {
     const present = players.filter((p) => draftAttendance[p.id]).map((p) => p.id);
@@ -825,11 +837,30 @@ function BadmintonTracker() {
                   const decided = r.scoreA !== '' && r.scoreB !== '' && !isNaN(a) && !isNaN(b) && a !== b;
                   const aWins = decided && a > b;
                   return (
-                    <div key={r.id} style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14 }} className="bt-scale-in">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="bt-display" style={{ color: TOKENS.gold, fontSize: 15, fontWeight: 700 }}>
-                          COURT {r.court || 1} · GAME {i + 1}
-                        </span>
+                    <div key={r.id} style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 14, overflow: 'hidden' }} className="bt-scale-in">
+                      <div className="flex items-center justify-between flex-wrap gap-2" style={{ background: TOKENS.surfaceAlt, padding: '10px 14px' }}>
+                        <div className="flex items-center gap-3">
+                          <span className="bt-display" style={{ color: TOKENS.text, fontSize: 16, fontWeight: 700 }}>
+                            COURT {r.court || 1}
+                          </span>
+                          {decided ? (
+                            <span
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display"
+                              style={{ background: TOKENS.surface, color: TOKENS.textDim, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', border: `1px solid ${TOKENS.line}` }}
+                            >
+                              FINAL
+                            </span>
+                          ) : (
+                            <span
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display"
+                              style={{ background: '#E2585B22', color: TOKENS.loss, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em' }}
+                            >
+                              <span className="bt-live-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: TOKENS.loss, display: 'inline-block' }} />
+                              LIVE
+                            </span>
+                          )}
+                          <span style={{ color: TOKENS.textDim, fontSize: 12 }}>Game {i + 1}</span>
+                        </div>
                         <div className="flex items-center gap-2">
                           {adminUnlocked && (
                             <>
@@ -849,6 +880,7 @@ function BadmintonTracker() {
                           )}
                         </div>
                       </div>
+                      <div style={{ padding: 14 }}>
                       {editingRoundId === r.id ? (
                         <div style={{ background: TOKENS.surfaceAlt, borderRadius: 10, padding: 12, border: `1px solid ${TOKENS.teal}` }}>
                           <div className="flex flex-wrap gap-4 mb-3">
@@ -919,75 +951,151 @@ function BadmintonTracker() {
                           </div>
                         </div>
                       ) : (
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <div className="flex-1 min-w-[110px]">
-                          <div className="flex items-center gap-1.5" style={{ fontWeight: 600, color: decided ? (aWins ? TOKENS.win : TOKENS.text) : TOKENS.text }}>
-                            {decided && aWins && <span style={{ fontSize: 15 }}>🏆</span>}
-                            {r.teamA.map((id) => playersById[id]).join(' & ')}
+                      <div>
+                        <div className="flex items-stretch gap-3 mb-3">
+                          <div style={{ flex: 1, border: `1px solid ${TOKENS.tealDim}`, borderRadius: 10, overflow: 'hidden' }}>
+                            <div className="bt-display" style={{ background: TOKENS.teal, color: '#0B0D10', textAlign: 'center', padding: '6px 0', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em' }}>
+                              TEAM A
+                            </div>
+                            <div style={{ position: 'relative', padding: '12px 10px', textAlign: 'center' }}>
+                              {decided && aWins && (
+                                <span
+                                  style={{
+                                    position: 'absolute',
+                                    inset: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: 56,
+                                    opacity: 0.14,
+                                    lineHeight: 1,
+                                    pointerEvents: 'none',
+                                  }}
+                                >
+                                  🏆
+                                </span>
+                              )}
+                              {r.teamA.map((id) => (
+                                <div key={id} style={{ position: 'relative', fontWeight: 600, color: decided ? (aWins ? TOKENS.win : TOKENS.text) : TOKENS.text, marginBottom: 2 }}>
+                                  {playersById[id]}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-center" style={{ minWidth: 24 }}>
+                            <span style={{ color: TOKENS.textDim }} className="bt-display text-sm">
+                              VS
+                            </span>
+                          </div>
+                          <div style={{ flex: 1, border: `1px solid ${TOKENS.gold}`, borderRadius: 10, overflow: 'hidden' }}>
+                            <div className="bt-display" style={{ background: TOKENS.gold, color: '#0B0D10', textAlign: 'center', padding: '6px 0', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em' }}>
+                              TEAM B
+                            </div>
+                            <div style={{ position: 'relative', padding: '12px 10px', textAlign: 'center' }}>
+                              {decided && !aWins && (
+                                <span
+                                  style={{
+                                    position: 'absolute',
+                                    inset: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: 56,
+                                    opacity: 0.14,
+                                    lineHeight: 1,
+                                    pointerEvents: 'none',
+                                  }}
+                                >
+                                  🏆
+                                </span>
+                              )}
+                              {r.teamB.map((id) => (
+                                <div key={id} style={{ position: 'relative', fontWeight: 600, color: decided ? (!aWins ? TOKENS.win : TOKENS.text) : TOKENS.text, marginBottom: 2 }}>
+                                  {playersById[id]}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         </div>
-                        <input
-                          className="bt-scorebox bt-mono"
-                          type="text"
-                          inputMode="numeric"
-                          value={r.scoreA}
-                          onChange={(e) => setScore(r.id, 'scoreA', e.target.value)}
-                          readOnly={!adminUnlocked}
-                          placeholder="0"
-                          style={{
-                            width: 48,
-                            textAlign: 'center',
-                            fontSize: 20,
-                            fontWeight: 700,
-                            background: TOKENS.surfaceAlt,
-                            border: `1px solid ${TOKENS.line}`,
-                            borderRadius: 8,
-                            color: TOKENS.text,
-                            padding: '4px 0',
-                            cursor: adminUnlocked ? 'text' : 'default',
-                          }}
-                        />
-                        <span style={{ color: TOKENS.textDim }} className="bt-display text-lg">
-                          VS
-                        </span>
-                        <input
-                          className="bt-scorebox bt-mono"
-                          type="text"
-                          inputMode="numeric"
-                          value={r.scoreB}
-                          onChange={(e) => setScore(r.id, 'scoreB', e.target.value)}
-                          readOnly={!adminUnlocked}
-                          placeholder="0"
-                          style={{
-                            width: 48,
-                            textAlign: 'center',
-                            fontSize: 20,
-                            fontWeight: 700,
-                            background: TOKENS.surfaceAlt,
-                            border: `1px solid ${TOKENS.line}`,
-                            borderRadius: 8,
-                            color: TOKENS.text,
-                            padding: '4px 0',
-                            cursor: adminUnlocked ? 'text' : 'default',
-                          }}
-                        />
-                        <div className="flex-1 min-w-[110px] text-right">
-                          <div className="flex items-center justify-end gap-1.5" style={{ fontWeight: 600, color: decided ? (!aWins ? TOKENS.win : TOKENS.text) : TOKENS.text }}>
-                            {r.teamB.map((id) => playersById[id]).join(' & ')}
-                            {decided && !aWins && <span style={{ fontSize: 15 }}>🏆</span>}
+
+                        <div className="flex items-stretch" style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                          <input
+                            className="bt-scorebox bt-mono"
+                            type="text"
+                            inputMode="numeric"
+                            value={r.scoreA}
+                            onChange={(e) => setScore(r.id, 'scoreA', e.target.value)}
+                            readOnly={!adminUnlocked}
+                            placeholder="0"
+                            style={{
+                              flex: 1,
+                              textAlign: 'center',
+                              fontSize: 22,
+                              fontWeight: 700,
+                              background: TOKENS.surfaceAlt,
+                              border: 'none',
+                              borderRight: `1px solid ${TOKENS.line}`,
+                              color: TOKENS.text,
+                              padding: '8px 0',
+                              cursor: adminUnlocked ? 'text' : 'default',
+                            }}
+                          />
+                          <div className="flex items-center justify-center" style={{ width: 36, background: TOKENS.surface }}>
+                            <span style={{ color: TOKENS.textDim }} className="bt-display text-xs">
+                              VS
+                            </span>
                           </div>
+                          <input
+                            className="bt-scorebox bt-mono"
+                            type="text"
+                            inputMode="numeric"
+                            value={r.scoreB}
+                            onChange={(e) => setScore(r.id, 'scoreB', e.target.value)}
+                            readOnly={!adminUnlocked}
+                            placeholder="0"
+                            style={{
+                              flex: 1,
+                              textAlign: 'center',
+                              fontSize: 22,
+                              fontWeight: 700,
+                              background: TOKENS.surfaceAlt,
+                              border: 'none',
+                              borderLeft: `1px solid ${TOKENS.line}`,
+                              color: TOKENS.text,
+                              padding: '8px 0',
+                              cursor: adminUnlocked ? 'text' : 'default',
+                            }}
+                          />
                         </div>
                       </div>
                       )}
-                      {r.resting.length > 0 && (
-                        <div style={{ marginTop: 8, fontSize: 12, color: TOKENS.textDim }}>
-                          Resting: {r.resting.map((id) => playersById[id]).join(', ')}
-                        </div>
-                      )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
+
+              {queueIds.length > 0 && (
+                <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Users size={15} style={{ color: TOKENS.textDim }} />
+                    <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
+                      QUEUE ({queueIds.length})
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {queueIds.map((id, qi) => (
+                      <span
+                        key={id}
+                        className="bt-mono"
+                        style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, borderRadius: 999, padding: '4px 10px', fontSize: 13, border: `1px solid ${TOKENS.line}` }}
+                      >
+                        {qi + 1}. {playersById[id]}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {adminUnlocked && (activeSession.courts || 1) > 1 && (
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -1024,12 +1132,6 @@ function BadmintonTracker() {
 
       {tab === 'standings' && (
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <TrophyIcon size={24} style={{ color: TOKENS.gold }} />
-            <span className="bt-display" style={{ fontSize: 20, fontWeight: 700, color: TOKENS.text }}>
-              STANDINGS
-            </span>
-          </div>
           <div className="flex gap-2 mb-4">
             <Chip active={standingsScope === 'session'} onClick={() => setStandingsScope('session')}>
               This game day
