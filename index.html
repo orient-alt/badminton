@@ -104,6 +104,20 @@ function TrophyIcon({ size = 22, style = {} }) {
     </svg>
   );
 }
+
+function GearIcon({ size = 18, style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'inline-block', verticalAlign: 'middle', ...style }}>
+      <circle cx="12" cy="12" r="3.3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M12 2.6v2.7M12 18.7v2.7M21.4 12h-2.7M5.3 12H2.6M18.6 5.4l-1.9 1.9M7.3 16.7l-1.9 1.9M18.6 18.6l-1.9-1.9M7.3 7.3 5.4 5.4"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 const Pencil = makeIcon('✎');
 const ArrowLeftRight = makeIcon('⇄');
 const Lock = makeIcon('🔒');
@@ -302,6 +316,8 @@ function BadmintonTracker() {
   const [newPasscodeInput, setNewPasscodeInput] = useState('');
   const [draftCourts, setDraftCourts] = useState(1);
   const [selectedCourt, setSelectedCourt] = useState(1);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('admin');
   const saveTimer = useRef(null);
   const skipSave = useRef(false);
 
@@ -513,7 +529,7 @@ function BadmintonTracker() {
       }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
         <div className="flex items-center gap-2">
           <ShuttleIcon size={32} style={{ color: TOKENS.gold }} />
           <div>
@@ -525,80 +541,184 @@ function BadmintonTracker() {
             </h1>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {[
-            ['today', 'Live Game'],
-            ['standings', 'Standings'],
-            ['history', 'History'],
-            ['roster', 'Roster'],
-          ].map(([key, label]) => (
-            <Chip key={key} active={tab === key} onClick={() => setTab(key)}>
-              {label}
-            </Chip>
-          ))}
-          <div style={{ width: 1, height: 20, background: TOKENS.line, margin: '0 4px' }} />
-          {adminUnlocked ? (
-            <button
-              onClick={lockAdmin}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
-              style={{ background: TOKENS.win, color: '#0B0D10' }}
-              title="You can edit. Tap to return to viewer mode."
-            >
-              <Unlock size={14} /> Admin
-            </button>
-          ) : showPasscodeBox ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                type="password"
-                autoFocus
-                value={passcodeInput}
-                onChange={(e) => {
-                  setPasscodeInput(e.target.value);
-                  setPasscodeError(false);
-                }}
-                onKeyDown={(e) => e.key === 'Enter' && tryUnlock()}
-                placeholder="Passcode"
-                style={{
-                  width: 100,
-                  background: TOKENS.surfaceAlt,
-                  color: TOKENS.text,
-                  border: `1px solid ${passcodeError ? TOKENS.loss : TOKENS.line}`,
-                  borderRadius: 8,
-                  padding: '5px 10px',
-                }}
-              />
-              <button onClick={tryUnlock} className="px-2 py-1.5 rounded-lg" style={{ background: TOKENS.teal, color: '#0B0D10' }}>
-                <Check size={14} />
-              </button>
-              <button
-                onClick={() => {
-                  setShowPasscodeBox(false);
-                  setPasscodeInput('');
-                  setPasscodeError(false);
-                }}
-                className="px-2 py-1.5 rounded-lg"
-                style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setShowPasscodeBox(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
-              style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
-              title="Viewing only. Enter the admin passcode to edit."
-            >
-              <Lock size={14} /> Viewer
-            </button>
-          )}
-        </div>
+        <button
+          onClick={() => setSettingsOpen((v) => !v)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
+          style={{
+            background: settingsOpen ? TOKENS.gold : TOKENS.surfaceAlt,
+            color: settingsOpen ? '#0B0D10' : TOKENS.textDim,
+            border: `1px solid ${settingsOpen ? TOKENS.gold : TOKENS.line}`,
+          }}
+          title="Settings"
+        >
+          <GearIcon size={16} /> Settings
+        </button>
       </div>
-      {!adminUnlocked && (
-        <div style={{ color: TOKENS.textDim, fontSize: 12, marginTop: -12, marginBottom: 16 }}>
+      {!adminUnlocked && !settingsOpen && (
+        <div style={{ color: TOKENS.textDim, fontSize: 12, marginBottom: 16 }}>
           You're viewing live scores and standings. Ask an admin for the passcode to make edits.
         </div>
       )}
+
+      {settingsOpen ? (
+        <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 16, marginBottom: 20 }}>
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div className="flex gap-2">
+              <Chip active={settingsTab === 'admin'} onClick={() => setSettingsTab('admin')}>
+                Admin Access
+              </Chip>
+              <Chip active={settingsTab === 'roster'} onClick={() => setSettingsTab('roster')}>
+                Roster
+              </Chip>
+            </div>
+            <button onClick={() => setSettingsOpen(false)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
+              <X size={18} />
+            </button>
+          </div>
+
+          {settingsTab === 'admin' && (
+            <div>
+              {adminUnlocked ? (
+                <button
+                  onClick={lockAdmin}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
+                  style={{ background: TOKENS.win, color: '#0B0D10' }}
+                >
+                  <Unlock size={14} /> Admin unlocked — tap to lock
+                </button>
+              ) : showPasscodeBox ? (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <input
+                    type="password"
+                    autoFocus
+                    value={passcodeInput}
+                    onChange={(e) => {
+                      setPasscodeInput(e.target.value);
+                      setPasscodeError(false);
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && tryUnlock()}
+                    placeholder="Passcode"
+                    style={{
+                      width: 140,
+                      background: TOKENS.surfaceAlt,
+                      color: TOKENS.text,
+                      border: `1px solid ${passcodeError ? TOKENS.loss : TOKENS.line}`,
+                      borderRadius: 8,
+                      padding: '6px 10px',
+                    }}
+                  />
+                  <button onClick={tryUnlock} className="px-3 py-1.5 rounded-lg" style={{ background: TOKENS.teal, color: '#0B0D10' }}>
+                    <Check size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowPasscodeBox(false);
+                      setPasscodeInput('');
+                      setPasscodeError(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg"
+                    style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowPasscodeBox(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
+                  style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
+                >
+                  <Lock size={14} /> Enter admin passcode
+                </button>
+              )}
+
+              {adminUnlocked && (
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${TOKENS.line}` }}>
+                  <div className="flex items-center gap-2 mb-2" style={{ color: TOKENS.gold, fontWeight: 700 }}>
+                    <Lock size={15} /> Admin passcode
+                  </div>
+                  <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 10 }}>
+                    Share this with whoever should be able to edit scores. Anyone with the link and this passcode can make changes.
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span style={{ color: TOKENS.textDim, fontSize: 13 }}>Current:</span>
+                    <span className="bt-mono" style={{ color: TOKENS.text, fontWeight: 700 }}>
+                      {showPasscodeText ? passcode : '••••'}
+                    </span>
+                    <button onClick={() => setShowPasscodeText((v) => !v)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
+                      {showPasscodeText ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={newPasscodeInput}
+                      onChange={(e) => setNewPasscodeInput(e.target.value)}
+                      placeholder="New passcode"
+                      style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text }}
+                    />
+                    <button
+                      onClick={() => {
+                        if (newPasscodeInput.trim()) {
+                          setPasscode(newPasscodeInput.trim());
+                          setNewPasscodeInput('');
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-sm font-semibold"
+                      style={{ background: TOKENS.teal, color: '#0B0D10' }}
+                    >
+                      Update
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {settingsTab === 'roster' && (
+            <div className="grid gap-2">
+              {players.map((p) =>
+                adminUnlocked ? (
+                  <div key={p.id} className="flex items-center gap-2">
+                    <input
+                      value={p.name}
+                      onChange={(e) => renamePlayer(p.id, e.target.value)}
+                      style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text, flex: 1 }}
+                    />
+                    <button onClick={() => removePlayer(p.id)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <div key={p.id} style={{ padding: '6px 10px', color: TOKENS.text }}>
+                    {p.name}
+                  </div>
+                )
+              )}
+              {adminUnlocked && (
+                <button
+                  onClick={addPlayer}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold mt-2 w-fit"
+                  style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}
+                >
+                  <Plus size={16} /> Add player
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
+      <div className="flex items-center gap-2 flex-wrap mb-5">
+        {[
+          ['today', 'Live Game'],
+          ['standings', 'Standings'],
+          ['history', 'History'],
+        ].map(([key, label]) => (
+          <Chip key={key} active={tab === key} onClick={() => setTab(key)}>
+            {label}
+          </Chip>
+        ))}
+      </div>
 
       {tab === 'today' && (
         <div>
@@ -1026,76 +1146,7 @@ function BadmintonTracker() {
         </div>
       )}
 
-      {tab === 'roster' && (
-        <div className="grid gap-2">
-          {players.map((p) =>
-            adminUnlocked ? (
-              <div key={p.id} className="flex items-center gap-2">
-                <input
-                  value={p.name}
-                  onChange={(e) => renamePlayer(p.id, e.target.value)}
-                  style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text, flex: 1 }}
-                />
-                <button onClick={() => removePlayer(p.id)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
-                  <X size={16} />
-                </button>
-              </div>
-            ) : (
-              <div key={p.id} style={{ padding: '6px 10px', color: TOKENS.text }}>
-                {p.name}
-              </div>
-            )
-          )}
-          {adminUnlocked && (
-            <button
-              onClick={addPlayer}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold mt-2 w-fit"
-              style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}
-            >
-              <Plus size={16} /> Add player
-            </button>
-          )}
-
-          {adminUnlocked && (
-            <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${TOKENS.line}` }}>
-              <div className="flex items-center gap-2 mb-2" style={{ color: TOKENS.gold, fontWeight: 700 }}>
-                <Lock size={15} /> Admin passcode
-              </div>
-              <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 10 }}>
-                Share this with whoever should be able to edit scores. Anyone with the link and this passcode can make changes.
-              </div>
-              <div className="flex items-center gap-2 mb-2">
-                <span style={{ color: TOKENS.textDim, fontSize: 13 }}>Current:</span>
-                <span className="bt-mono" style={{ color: TOKENS.text, fontWeight: 700 }}>
-                  {showPasscodeText ? passcode : '••••'}
-                </span>
-                <button onClick={() => setShowPasscodeText((v) => !v)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
-                  {showPasscodeText ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  value={newPasscodeInput}
-                  onChange={(e) => setNewPasscodeInput(e.target.value)}
-                  placeholder="New passcode"
-                  style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text }}
-                />
-                <button
-                  onClick={() => {
-                    if (newPasscodeInput.trim()) {
-                      setPasscode(newPasscodeInput.trim());
-                      setNewPasscodeInput('');
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded-lg text-sm font-semibold"
-                  style={{ background: TOKENS.teal, color: '#0B0D10' }}
-                >
-                  Update
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+      </>
       )}
     </div>
   );
