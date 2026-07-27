@@ -26,7 +26,7 @@
 <body>
 <div id="root"></div>
 
-<script type="text/babel" data-presets="react">
+<script type="text/plain" id="app-source">
 const { useState, useEffect, useRef } = React;
 
 // ============================================================
@@ -1012,6 +1012,17 @@ function BadmintonTracker() {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<BadmintonTracker />);
+</script>
+<script>
+  // Manually compile the app source with Babel's CLASSIC JSX runtime (React.createElement),
+  // instead of relying on <script type="text/babel">'s default "automatic" runtime, which
+  // emits an ES `import` statement for react/jsx-runtime — that throws
+  // "Cannot use import statement outside a module" since this runs as a plain script, not a module.
+  var appSource = document.getElementById('app-source').textContent;
+  var compiled = Babel.transform(appSource, { presets: [['react', { runtime: 'classic' }]] }).code;
+  var s = document.createElement('script');
+  s.text = compiled;
+  document.body.appendChild(s);
 </script>
 </body>
 </html>
