@@ -77,7 +77,33 @@ const X = makeIcon('✕');
 const ChevronDown = makeIcon('▾');
 const ChevronUp = makeIcon('▴');
 const CalendarDays = makeIcon('📅');
-const Feather = makeIcon('🏸');
+function ShuttleIcon({ size = 26, style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'inline-block', verticalAlign: 'middle', ...style }}>
+      <path d="M4.2 3.4 L11.4 15.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M8.6 2.4 L12.4 15.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M12.5 2 L13.1 15.9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M16.5 2.4 L13.9 15.7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M20.3 3.6 L14.8 15.4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M4.2 3.4 Q12.4 8.4 20.3 3.6" fill="none" stroke="currentColor" strokeWidth="1.1" opacity="0.7" />
+      <ellipse cx="13" cy="18.4" rx="3.6" ry="2.7" fill="currentColor" />
+      <ellipse cx="13" cy="17.6" rx="3.6" ry="1.1" fill="#00000022" />
+    </svg>
+  );
+}
+
+function TrophyIcon({ size = 22, style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'inline-block', verticalAlign: 'middle', ...style }}>
+      <path d="M7 3.5h10v3.2a5 5 0 0 1-10 0V3.5z" fill="currentColor" />
+      <path d="M7 4.3H3.6a1 1 0 0 0-1 1v1.1a3.6 3.6 0 0 0 3.6 3.6h0.9" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M17 4.3h3.4a1 1 0 0 1 1 1v1.1a3.6 3.6 0 0 1-3.6 3.6H17" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <rect x="11.1" y="9.8" width="1.8" height="3.6" fill="currentColor" />
+      <path d="M8.4 15.6h7.2l-0.8 2.2H9.2z" fill="currentColor" />
+      <rect x="7.6" y="18.1" width="8.8" height="1.7" rx="0.7" fill="currentColor" />
+    </svg>
+  );
+}
 const Pencil = makeIcon('✎');
 const ArrowLeftRight = makeIcon('⇄');
 const Lock = makeIcon('🔒');
@@ -124,7 +150,7 @@ function computePartnerCounts(sessions) {
   return counts;
 }
 
-function pickRound(mode, presentIds, currentRounds, partnerCounts) {
+function pickRound(mode, presentIds, currentRounds, partnerCounts, court = 1) {
   const need = mode === 'doubles' ? 4 : 2;
   if (presentIds.length < need) return null;
 
@@ -147,7 +173,7 @@ function pickRound(mode, presentIds, currentRounds, partnerCounts) {
 
   if (mode === 'singles') {
     const shuffled = [...playing].sort(() => Math.random() - 0.5);
-    return { id: uid('r'), teamA: [shuffled[0]], teamB: [shuffled[1]], resting, scoreA: '', scoreB: '' };
+    return { id: uid('r'), teamA: [shuffled[0]], teamB: [shuffled[1]], resting, scoreA: '', scoreB: '', court };
   }
 
   const [a, b, c, d] = playing;
@@ -166,11 +192,11 @@ function pickRound(mode, presentIds, currentRounds, partnerCounts) {
   const flip = Math.random() < 0.5;
   const teamA = flip ? chosen.t2 : chosen.t1;
   const teamB = flip ? chosen.t1 : chosen.t2;
-  return { id: uid('r'), teamA, teamB, resting, scoreA: '', scoreB: '' };
+  return { id: uid('r'), teamA, teamB, resting, scoreA: '', scoreB: '', court };
 }
 
-function blankRound(mode, presentIds) {
-  return { id: uid('r'), teamA: [], teamB: [], resting: [...presentIds], scoreA: '', scoreB: '' };
+function blankRound(mode, presentIds, court = 1) {
+  return { id: uid('r'), teamA: [], teamB: [], resting: [...presentIds], scoreA: '', scoreB: '', court };
 }
 
 function computeStandings(players, sessions) {
@@ -274,6 +300,8 @@ function BadmintonTracker() {
   const [passcodeError, setPasscodeError] = useState(false);
   const [showPasscodeText, setShowPasscodeText] = useState(false);
   const [newPasscodeInput, setNewPasscodeInput] = useState('');
+  const [draftCourts, setDraftCourts] = useState(1);
+  const [selectedCourt, setSelectedCourt] = useState(1);
   const saveTimer = useRef(null);
   const skipSave = useRef(false);
 
@@ -347,22 +375,30 @@ function BadmintonTracker() {
 
   function startSession() {
     const present = players.filter((p) => draftAttendance[p.id]).map((p) => p.id);
-    const newSession = { id: uid('s'), date: selectedDate, mode: draftMode, attendance: present, rounds: [] };
+    const newSession = { id: uid('s'), date: selectedDate, mode: draftMode, attendance: present, rounds: [], courts: draftCourts };
     setSessions((prev) => [...prev, newSession]);
+    setSelectedCourt(1);
   }
 
   function updateSession(patch) {
     setSessions((prev) => prev.map((s) => (s.id === activeSession.id ? { ...s, ...patch } : s)));
   }
 
+  function addCourt() {
+    updateSession({ courts: (activeSession.courts || 1) + 1 });
+    setSelectedCourt((activeSession.courts || 1) + 1);
+  }
+
   function addRound() {
-    const round = pickRound(activeSession.mode, activeSession.attendance, activeSession.rounds, partnerCounts);
+    const court = Math.min(selectedCourt, activeSession.courts || 1);
+    const round = pickRound(activeSession.mode, activeSession.attendance, activeSession.rounds, partnerCounts, court);
     if (!round) return;
     updateSession({ rounds: [...activeSession.rounds, round] });
   }
 
   function addManualRound() {
-    const round = blankRound(activeSession.mode, activeSession.attendance);
+    const court = Math.min(selectedCourt, activeSession.courts || 1);
+    const round = blankRound(activeSession.mode, activeSession.attendance, court);
     updateSession({ rounds: [...activeSession.rounds, round] });
     openEditTeams(round);
   }
@@ -409,7 +445,8 @@ function BadmintonTracker() {
     setSpinId(roundId);
     setTimeout(() => setSpinId(null), 400);
     const priorRounds = activeSession.rounds.slice(0, idx);
-    const fresh = pickRound(activeSession.mode, activeSession.attendance, priorRounds, partnerCounts);
+    const existingCourt = activeSession.rounds[idx].court || 1;
+    const fresh = pickRound(activeSession.mode, activeSession.attendance, priorRounds, partnerCounts, existingCourt);
     if (!fresh) return;
     const newRounds = [...activeSession.rounds];
     newRounds[idx] = { ...fresh, id: roundId, scoreA: newRounds[idx].scoreA, scoreB: newRounds[idx].scoreB };
@@ -478,14 +515,19 @@ function BadmintonTracker() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
         <div className="flex items-center gap-2">
-          <Feather size={26} style={{ color: TOKENS.gold }} />
-          <h1 className="bt-display" style={{ fontSize: 30, fontWeight: 700, color: TOKENS.text, lineHeight: 1 }}>
-            OFFICE COURT LOG
-          </h1>
+          <ShuttleIcon size={32} style={{ color: TOKENS.gold }} />
+          <div>
+            <div className="bt-display" style={{ fontSize: 11, fontWeight: 700, color: TOKENS.gold, letterSpacing: '0.18em', lineHeight: 1, marginBottom: 2 }}>
+              MECSR PRESENTS
+            </div>
+            <h1 className="bt-display" style={{ fontSize: 28, fontWeight: 700, color: TOKENS.text, lineHeight: 1 }}>
+              BADMINTON CHAMPIONSHIP <span style={{ color: TOKENS.gold }}>2026</span>
+            </h1>
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {[
-            ['today', 'Today'],
+            ['today', 'Live Game'],
             ['standings', 'Standings'],
             ['history', 'History'],
             ['roster', 'Roster'],
@@ -598,6 +640,26 @@ function BadmintonTracker() {
                   Singles (2/court)
                 </Chip>
               </div>
+              <div className="flex items-center gap-3 mb-4">
+                <span style={{ color: TOKENS.textDim, fontSize: 14 }}>Number of courts:</span>
+                <button
+                  onClick={() => setDraftCourts((c) => Math.max(1, c - 1))}
+                  className="px-2.5 py-1 rounded-lg font-semibold"
+                  style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
+                >
+                  −
+                </button>
+                <span className="bt-mono" style={{ fontWeight: 700, minWidth: 20, textAlign: 'center' }}>
+                  {draftCourts}
+                </span>
+                <button
+                  onClick={() => setDraftCourts((c) => c + 1)}
+                  className="px-2.5 py-1 rounded-lg font-semibold"
+                  style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
+                >
+                  +
+                </button>
+              </div>
               <button
                 onClick={startSession}
                 disabled={!draftAttendance || Object.values(draftAttendance).filter(Boolean).length < (draftMode === 'doubles' ? 4 : 2)}
@@ -617,15 +679,23 @@ function BadmintonTracker() {
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <div style={{ color: TOKENS.textDim, fontSize: 14 }}>
                   {activeSession.attendance.length} present · {activeSession.mode === 'doubles' ? 'Doubles' : 'Singles'} ·{' '}
-                  {activeSession.rounds.length} game{activeSession.rounds.length === 1 ? '' : 's'} logged
+                  {activeSession.rounds.length} game{activeSession.rounds.length === 1 ? '' : 's'} logged ·{' '}
+                  {activeSession.courts || 1} court{(activeSession.courts || 1) === 1 ? '' : 's'}
                 </div>
-                <button
-                  onClick={() => deleteSession(activeSession.id)}
-                  className="flex items-center gap-1 text-sm"
-                  style={{ color: TOKENS.loss, visibility: adminUnlocked ? 'visible' : 'hidden' }}
-                >
-                  <Trash2 size={14} /> Clear session
-                </button>
+                <div className="flex items-center gap-3">
+                  {adminUnlocked && (
+                    <button onClick={addCourt} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.teal }}>
+                      <Plus size={14} /> Add court
+                    </button>
+                  )}
+                  <button
+                    onClick={() => deleteSession(activeSession.id)}
+                    className="flex items-center gap-1 text-sm"
+                    style={{ color: TOKENS.loss, visibility: adminUnlocked ? 'visible' : 'hidden' }}
+                  >
+                    <Trash2 size={14} /> Clear session
+                  </button>
+                </div>
               </div>
 
               <div className="grid gap-3 mb-4">
@@ -638,21 +708,21 @@ function BadmintonTracker() {
                     <div key={r.id} style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14 }} className="bt-scale-in">
                       <div className="flex items-center justify-between mb-2">
                         <span className="bt-display" style={{ color: TOKENS.gold, fontSize: 15, fontWeight: 700 }}>
-                          COURT · GAME {i + 1}
+                          COURT {r.court || 1} · GAME {i + 1}
                         </span>
                         <div className="flex items-center gap-2">
                           {adminUnlocked && (
                             <>
-                              <button onClick={() => swapRoundResult(r.id)} title="Swap sides / fix wrong winner" style={{ color: TOKENS.textDim }}>
+                              <button onClick={() => swapRoundResult(r.id)} title="Swap sides / fix wrong winner" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                                 <ArrowLeftRight size={16} />
                               </button>
-                              <button onClick={() => openEditTeams(r)} title="Fix player selection" style={{ color: TOKENS.textDim }}>
+                              <button onClick={() => openEditTeams(r)} title="Fix player selection" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                                 <Pencil size={16} />
                               </button>
-                              <button onClick={() => reshuffleRound(r.id)} title="Reshuffle" style={{ color: TOKENS.textDim }}>
+                              <button onClick={() => reshuffleRound(r.id)} title="Reshuffle" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                                 <RotateCcw size={16} className={spinId === r.id ? 'bt-spin' : ''} />
                               </button>
-                              <button onClick={() => deleteRound(r.id)} title="Remove" style={{ color: TOKENS.textDim }}>
+                              <button onClick={() => deleteRound(r.id)} title="Remove" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                                 <Trash2 size={16} />
                               </button>
                             </>
@@ -730,8 +800,9 @@ function BadmintonTracker() {
                         </div>
                       ) : (
                       <div className="flex items-center gap-3 flex-wrap">
-                        <div className="flex-1 min-w-[160px]">
-                          <div style={{ fontWeight: 600, color: decided ? (aWins ? TOKENS.win : TOKENS.text) : TOKENS.text }}>
+                        <div className="flex-1 min-w-[110px]">
+                          <div className="flex items-center gap-1.5" style={{ fontWeight: 600, color: decided ? (aWins ? TOKENS.win : TOKENS.text) : TOKENS.text }}>
+                            {decided && aWins && <span style={{ fontSize: 15 }}>🏆</span>}
                             {r.teamA.map((id) => playersById[id]).join(' & ')}
                           </div>
                         </div>
@@ -780,9 +851,10 @@ function BadmintonTracker() {
                             cursor: adminUnlocked ? 'text' : 'default',
                           }}
                         />
-                        <div className="flex-1 min-w-[160px] text-right">
-                          <div style={{ fontWeight: 600, color: decided ? (!aWins ? TOKENS.win : TOKENS.text) : TOKENS.text }}>
+                        <div className="flex-1 min-w-[110px] text-right">
+                          <div className="flex items-center justify-end gap-1.5" style={{ fontWeight: 600, color: decided ? (!aWins ? TOKENS.win : TOKENS.text) : TOKENS.text }}>
                             {r.teamB.map((id) => playersById[id]).join(' & ')}
+                            {decided && !aWins && <span style={{ fontSize: 15 }}>🏆</span>}
                           </div>
                         </div>
                       </div>
@@ -797,6 +869,16 @@ function BadmintonTracker() {
                 })}
               </div>
 
+              {adminUnlocked && (activeSession.courts || 1) > 1 && (
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span style={{ color: TOKENS.textDim, fontSize: 13 }}>New game for:</span>
+                  {Array.from({ length: activeSession.courts || 1 }, (_, i) => i + 1).map((cnum) => (
+                    <Chip key={cnum} active={selectedCourt === cnum} onClick={() => setSelectedCourt(cnum)} color={TOKENS.gold}>
+                      Court {cnum}
+                    </Chip>
+                  ))}
+                </div>
+              )}
               {adminUnlocked && (
               <div className="flex gap-2 flex-wrap">
                 <button
@@ -823,7 +905,7 @@ function BadmintonTracker() {
       {tab === 'standings' && (
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <span style={{ fontSize: 20 }}>🏸</span>
+            <TrophyIcon size={24} style={{ color: TOKENS.gold }} />
             <span className="bt-display" style={{ fontSize: 20, fontWeight: 700, color: TOKENS.text }}>
               STANDINGS
             </span>
@@ -916,15 +998,23 @@ function BadmintonTracker() {
                 </button>
                 {open && (
                   <div className="mt-3 grid gap-2">
-                    {s.rounds.map((r, i) => (
+                    {s.rounds.map((r, i) => {
+                      const ha = Number(r.scoreA), hb = Number(r.scoreB);
+                      const hDecided = r.scoreA !== '' && r.scoreB !== '' && !isNaN(ha) && !isNaN(hb) && ha !== hb;
+                      const hAWins = hDecided && ha > hb;
+                      return (
                       <div key={r.id} style={{ fontSize: 14, color: TOKENS.textDim }}>
-                        Game {i + 1}: {r.teamA.map((id) => playersById[id]).join(' & ')}{' '}
+                        Game {i + 1}{(s.courts || 1) > 1 ? ` (Court ${r.court || 1})` : ''}:{' '}
+                        {hDecided && hAWins && <span style={{ fontSize: 13 }}>🏆 </span>}
+                        {r.teamA.map((id) => playersById[id]).join(' & ')}{' '}
                         <span className="bt-mono" style={{ color: TOKENS.text }}>
                           {r.scoreA || 0}–{r.scoreB || 0}
                         </span>{' '}
+                        {hDecided && !hAWins && <span style={{ fontSize: 13 }}>🏆 </span>}
                         {r.teamB.map((id) => playersById[id]).join(' & ')}
                       </div>
-                    ))}
+                      );
+                    })}
                     <button onClick={() => deleteSession(s.id)} className="flex items-center gap-1 text-sm mt-1" style={{ color: TOKENS.loss, visibility: adminUnlocked ? 'visible' : 'hidden' }}>
                       <Trash2 size={14} /> Delete session
                     </button>
@@ -946,7 +1036,7 @@ function BadmintonTracker() {
                   onChange={(e) => renamePlayer(p.id, e.target.value)}
                   style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text, flex: 1 }}
                 />
-                <button onClick={() => removePlayer(p.id)} style={{ color: TOKENS.textDim }}>
+                <button onClick={() => removePlayer(p.id)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                   <X size={16} />
                 </button>
               </div>
@@ -979,7 +1069,7 @@ function BadmintonTracker() {
                 <span className="bt-mono" style={{ color: TOKENS.text, fontWeight: 700 }}>
                   {showPasscodeText ? passcode : '••••'}
                 </span>
-                <button onClick={() => setShowPasscodeText((v) => !v)} style={{ color: TOKENS.textDim }}>
+                <button onClick={() => setShowPasscodeText((v) => !v)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                   {showPasscodeText ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
