@@ -541,29 +541,40 @@ function BadmintonTracker() {
       }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          <ShuttleIcon size={32} style={{ color: TOKENS.gold }} />
-          <div>
-            <div className="bt-display" style={{ fontSize: 11, fontWeight: 700, color: TOKENS.gold, letterSpacing: '0.18em', lineHeight: 1, marginBottom: 2 }}>
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div
+          className="flex items-center gap-2"
+          style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}
+          onClick={() => {
+            setSettingsOpen(false);
+            setTab('today');
+          }}
+          title="Back to Live Game"
+        >
+          <ShuttleIcon size={32} style={{ color: TOKENS.gold, flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <div className="bt-display" style={{ fontSize: 10, fontWeight: 700, color: TOKENS.gold, letterSpacing: '0.16em', lineHeight: 1, marginBottom: 2 }}>
               MECSR PRESENTS
             </div>
-            <h1 className="bt-display" style={{ fontSize: 28, fontWeight: 700, color: TOKENS.text, lineHeight: 1 }}>
+            <h1 className="bt-display" style={{ fontSize: 'clamp(18px, 5.5vw, 28px)', fontWeight: 700, color: TOKENS.text, lineHeight: 1.15 }}>
               BADMINTON CHAMPIONSHIP <span style={{ color: TOKENS.gold }}>2026</span>
             </h1>
           </div>
         </div>
         <button
           onClick={() => setSettingsOpen((v) => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
+          className="flex items-center justify-center rounded-full"
           style={{
             background: settingsOpen ? TOKENS.gold : TOKENS.surfaceAlt,
             color: settingsOpen ? '#0B0D10' : TOKENS.textDim,
             border: `1px solid ${settingsOpen ? TOKENS.gold : TOKENS.line}`,
+            flexShrink: 0,
+            width: 36,
+            height: 36,
           }}
           title="Settings"
         >
-          <GearIcon size={16} /> Settings
+          <GearIcon size={17} />
         </button>
       </div>
       {!adminUnlocked && !settingsOpen && (
@@ -953,7 +964,7 @@ function BadmintonTracker() {
                       ) : (
                       <div>
                         <div className="flex items-stretch gap-3 mb-3">
-                          <div style={{ flex: 1, border: `1px solid ${TOKENS.tealDim}`, borderRadius: 10, overflow: 'hidden' }}>
+                          <div style={{ flex: 1, background: '#2FA8A02E', border: `1px solid ${TOKENS.tealDim}`, borderRadius: 10, overflow: 'hidden' }}>
                             <div className="bt-display" style={{ background: TOKENS.teal, color: '#0B0D10', textAlign: 'center', padding: '6px 0', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em' }}>
                               TEAM A
                             </div>
@@ -987,7 +998,7 @@ function BadmintonTracker() {
                               VS
                             </span>
                           </div>
-                          <div style={{ flex: 1, border: `1px solid ${TOKENS.gold}`, borderRadius: 10, overflow: 'hidden' }}>
+                          <div style={{ flex: 1, background: '#F4B9422E', border: `1px solid ${TOKENS.gold}`, borderRadius: 10, overflow: 'hidden' }}>
                             <div className="bt-display" style={{ background: TOKENS.gold, color: '#0B0D10', textAlign: 'center', padding: '6px 0', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em' }}>
                               TEAM B
                             </div>
@@ -1018,7 +1029,7 @@ function BadmintonTracker() {
                           </div>
                         </div>
 
-                        <div className="flex items-stretch" style={{ border: `1px solid ${TOKENS.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                        <div className="flex items-stretch gap-3">
                           <input
                             className="bt-scorebox bt-mono"
                             type="text"
@@ -1029,22 +1040,20 @@ function BadmintonTracker() {
                             placeholder="0"
                             style={{
                               flex: 1,
+                              minWidth: 0,
+                              width: '100%',
                               textAlign: 'center',
                               fontSize: 22,
                               fontWeight: 700,
-                              background: TOKENS.surfaceAlt,
-                              border: 'none',
-                              borderRight: `1px solid ${TOKENS.line}`,
+                              background: '#2FA8A02E',
+                              border: `1px solid ${TOKENS.tealDim}`,
+                              borderRadius: 10,
                               color: TOKENS.text,
-                              padding: '8px 0',
+                              padding: '10px 0',
                               cursor: adminUnlocked ? 'text' : 'default',
                             }}
                           />
-                          <div className="flex items-center justify-center" style={{ width: 36, background: TOKENS.surface }}>
-                            <span style={{ color: TOKENS.textDim }} className="bt-display text-xs">
-                              VS
-                            </span>
-                          </div>
+                          <div style={{ minWidth: 24 }} />
                           <input
                             className="bt-scorebox bt-mono"
                             type="text"
@@ -1055,14 +1064,16 @@ function BadmintonTracker() {
                             placeholder="0"
                             style={{
                               flex: 1,
+                              minWidth: 0,
+                              width: '100%',
                               textAlign: 'center',
                               fontSize: 22,
                               fontWeight: 700,
-                              background: TOKENS.surfaceAlt,
-                              border: 'none',
-                              borderLeft: `1px solid ${TOKENS.line}`,
+                              background: '#F4B9422E',
+                              border: `1px solid ${TOKENS.gold}`,
+                              borderRadius: 10,
                               color: TOKENS.text,
-                              padding: '8px 0',
+                              padding: '10px 0',
                               cursor: adminUnlocked ? 'text' : 'default',
                             }}
                           />
