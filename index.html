@@ -110,12 +110,9 @@ function TrophyIcon({ size = 22, style = {} }) {
 function GearIcon({ size = 18, style = {} }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: 'inline-block', verticalAlign: 'middle', ...style }}>
-      <circle cx="12" cy="12" r="3.3" fill="none" stroke="currentColor" strokeWidth="1.7" />
       <path
-        d="M12 2.6v2.7M12 18.7v2.7M21.4 12h-2.7M5.3 12H2.6M18.6 5.4l-1.9 1.9M7.3 16.7l-1.9 1.9M18.6 18.6l-1.9-1.9M7.3 7.3 5.4 5.4"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
+        fill="currentColor"
+        d="M19.14,12.94c0.04,-0.3,0.06,-0.61,0.06,-0.94c0,-0.32,-0.02,-0.64,-0.07,-0.94l2.03,-1.58c0.18,-0.14,0.23,-0.41,0.12,-0.61l-1.92,-3.32c-0.12,-0.22,-0.37,-0.29,-0.59,-0.22l-2.39,0.96c-0.5,-0.38,-1.03,-0.7,-1.62,-0.94L14.4,2.81c-0.04,-0.24,-0.24,-0.41,-0.48,-0.41h-3.84c-0.24,0,-0.43,0.17,-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22,-0.08,-0.47,0,-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14,-0.23,0.41,-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39,-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44,-0.17,0.47,-0.41l0.36,-2.54c0.59,-0.24,1.13,-0.56,1.62,-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59,-0.22l1.92,-3.32c0.12,-0.22,0.07,-0.47,-0.12,-0.61L19.14,12.94z M12,15.6c-1.98,0,-3.6,-1.62,-3.6,-3.6s1.62,-3.6,3.6,-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"
       />
     </svg>
   );
@@ -139,6 +136,11 @@ function todayISO() {
 function fmtDate(iso) {
   const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function fmtDDMMYYYY(iso) {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
 }
 
 function defaultPlayers() {
@@ -547,7 +549,8 @@ function BadmintonTracker() {
       }}
     >
       {/* Header */}
-      <div className="flex items-start justify-between gap-3 mb-4">
+      <div style={{ background: TOKENS.surface, borderRadius: 14, padding: '14px 18px', marginBottom: 20 }}>
+        <div className="flex items-start justify-between gap-3">
         <div
           className="flex items-center gap-2"
           style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}
@@ -582,6 +585,7 @@ function BadmintonTracker() {
         >
           <GearIcon size={17} />
         </button>
+        </div>
       </div>
       {!adminUnlocked && !settingsOpen && (
         <div style={{ color: TOKENS.textDim, fontSize: 12, marginBottom: 16 }}>
@@ -594,7 +598,7 @@ function BadmintonTracker() {
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <div className="flex gap-2">
               <Chip active={settingsTab === 'admin'} onClick={() => setSettingsTab('admin')}>
-                Admin Access
+                Change Role
               </Chip>
               <Chip active={settingsTab === 'roster'} onClick={() => setSettingsTab('roster')}>
                 Roster
@@ -607,15 +611,27 @@ function BadmintonTracker() {
 
           {settingsTab === 'admin' && (
             <div>
-              {adminUnlocked ? (
-                <button
-                  onClick={lockAdmin}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
-                  style={{ background: TOKENS.win, color: '#0B0D10' }}
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <Chip
+                  active={!adminUnlocked}
+                  onClick={() => {
+                    if (adminUnlocked) lockAdmin();
+                  }}
                 >
-                  <Unlock size={14} /> Admin unlocked — tap to lock
-                </button>
-              ) : showPasscodeBox ? (
+                  Viewer
+                </Chip>
+                <Chip
+                  active={adminUnlocked}
+                  color={TOKENS.win}
+                  onClick={() => {
+                    if (!adminUnlocked) setShowPasscodeBox(true);
+                  }}
+                >
+                  Admin
+                </Chip>
+              </div>
+
+              {!adminUnlocked && showPasscodeBox && (
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <input
                     type="password"
@@ -651,14 +667,6 @@ function BadmintonTracker() {
                     <X size={14} />
                   </button>
                 </div>
-              ) : (
-                <button
-                  onClick={() => setShowPasscodeBox(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium"
-                  style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
-                >
-                  <Lock size={14} /> Enter admin passcode
-                </button>
               )}
 
               {adminUnlocked && (
@@ -863,10 +871,13 @@ function BadmintonTracker() {
                   return (
                     <div key={r.id} style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 14, overflow: 'hidden' }} className="bt-scale-in">
                       <div className="flex items-center justify-between flex-wrap gap-2" style={{ background: TOKENS.surfaceAlt, padding: '10px 14px' }}>
-                        <div className="flex items-center gap-3">
-                          <span className="bt-display" style={{ color: TOKENS.text, fontSize: 16, fontWeight: 700 }}>
-                            COURT {r.court || 1}
+                        <div className="flex items-center gap-2">
+                          <span className="bt-display" style={{ color: TOKENS.text, fontSize: 17, fontWeight: 700 }}>
+                            GAME {i + 1}
                           </span>
+                          <span style={{ color: TOKENS.textDim, fontSize: 12 }}>Court {r.court || 1}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
                           {decided ? (
                             <span
                               className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display"
@@ -883,9 +894,6 @@ function BadmintonTracker() {
                               LIVE
                             </span>
                           )}
-                          <span style={{ color: TOKENS.textDim, fontSize: 12 }}>Game {i + 1}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
                           {adminUnlocked && (
                             <>
                               <button onClick={() => swapRoundResult(r.id)} title="Swap sides / fix wrong winner" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
@@ -1156,7 +1164,7 @@ function BadmintonTracker() {
 
       {tab === 'standings' && (
         <div>
-          <div className="flex gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <Chip active={standingsScope === 'session'} onClick={() => setStandingsScope('session')}>
               This game day
             </Chip>
@@ -1164,9 +1172,14 @@ function BadmintonTracker() {
               Overall
             </Chip>
           </div>
+          {standingsScope === 'session' && (
+            <div className="bt-mono" style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 12 }}>
+              {fmtDDMMYYYY(selectedDate)}
+            </div>
+          )}
           {standingsScope === 'session' && !activeSession && (
             <div style={{ color: TOKENS.textDim, marginBottom: 12 }}>
-              No session started for {fmtDate(selectedDate)} yet — pick a date on the Today tab, or switch to Overall.
+              No session started for {fmtDate(selectedDate)} yet — pick a date on the Live Game tab, or switch to Overall.
             </div>
           )}
           {topDuo && standingsScope === 'alltime' && (
@@ -1184,13 +1197,12 @@ function BadmintonTracker() {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ color: TOKENS.textDim, fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ranking</th>
+                    <th style={{ textAlign: 'left', padding: '6px 8px' }}>Rank</th>
                     <th style={{ textAlign: 'left', padding: '6px 8px' }}>Player</th>
                     <th style={{ textAlign: 'right', padding: '6px 8px' }}>Wins</th>
                     <th style={{ textAlign: 'right', padding: '6px 8px' }}>Games Played</th>
-                    <th style={{ textAlign: 'right', padding: '6px 8px' }}>Total Score</th>
                     <th style={{ textAlign: 'right', padding: '6px 8px' }}>Win%</th>
-                    <th style={{ textAlign: 'right', padding: '6px 8px' }}>Diff</th>
+                    <th style={{ textAlign: 'right', padding: '6px 8px' }}>Total Score</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1206,15 +1218,11 @@ function BadmintonTracker() {
                       <td className="bt-mono" style={{ textAlign: 'right', padding: '8px' }}>
                         {s.played}
                       </td>
-                      <td className="bt-mono" style={{ textAlign: 'right', padding: '8px', color: TOKENS.gold, fontWeight: 700 }}>
-                        {s.pf}
-                      </td>
                       <td className="bt-mono" style={{ textAlign: 'right', padding: '8px' }}>
                         {s.played ? Math.round((s.won / s.played) * 100) + '%' : '—'}
                       </td>
-                      <td className="bt-mono" style={{ textAlign: 'right', padding: '8px', color: s.pf - s.pa > 0 ? TOKENS.win : s.pf - s.pa < 0 ? TOKENS.loss : TOKENS.textDim }}>
-                        {s.pf - s.pa > 0 ? '+' : ''}
-                        {s.pf - s.pa}
+                      <td className="bt-mono" style={{ textAlign: 'right', padding: '8px', color: TOKENS.gold, fontWeight: 700 }}>
+                        {s.pf}
                       </td>
                     </tr>
                   ))}
@@ -1226,7 +1234,7 @@ function BadmintonTracker() {
       )}
 
       {tab === 'history' && (
-        <div className="grid gap-3">
+        <div className="grid gap-3" style={{ maxWidth: 640, marginLeft: 0 }}>
           {pastSessions.length === 0 && <div style={{ color: TOKENS.textDim }}>No sessions logged yet.</div>}
           {pastSessions.map((s) => {
             const open = !!historyOpen[s.id];
@@ -1248,16 +1256,24 @@ function BadmintonTracker() {
                       const ha = Number(r.scoreA), hb = Number(r.scoreB);
                       const hDecided = r.scoreA !== '' && r.scoreB !== '' && !isNaN(ha) && !isNaN(hb) && ha !== hb;
                       const hAWins = hDecided && ha > hb;
+                      const winners = hDecided ? (hAWins ? r.teamA : r.teamB) : r.teamA;
+                      const losers = hDecided ? (hAWins ? r.teamB : r.teamA) : r.teamB;
+                      const winScore = hDecided ? (hAWins ? r.scoreA : r.scoreB) : r.scoreA;
+                      const loseScore = hDecided ? (hAWins ? r.scoreB : r.scoreA) : r.scoreB;
                       return (
                       <div key={r.id} style={{ fontSize: 14, color: TOKENS.textDim }}>
                         Game {i + 1}{(s.courts || 1) > 1 ? ` (Court ${r.court || 1})` : ''}:{' '}
-                        {hDecided && hAWins && <span style={{ fontSize: 13 }}>🏆 </span>}
-                        {r.teamA.map((id) => playersById[id]).join(' & ')}{' '}
-                        <span className="bt-mono" style={{ color: TOKENS.text }}>
-                          {r.scoreA || 0}–{r.scoreB || 0}
-                        </span>{' '}
-                        {hDecided && !hAWins && <span style={{ fontSize: 13 }}>🏆 </span>}
-                        {r.teamB.map((id) => playersById[id]).join(' & ')}
+                        {hDecided && (
+                          <Check size={13} style={{ color: TOKENS.win, display: 'inline-block', verticalAlign: 'middle', marginRight: 3 }} />
+                        )}
+                        <span style={{ fontWeight: hDecided ? 700 : 400, color: hDecided ? TOKENS.win : TOKENS.text }}>
+                          {winners.map((id) => playersById[id]).join(' & ')}
+                        </span>
+                        <span style={{ margin: '0 6px' }}>vs</span>
+                        {losers.map((id) => playersById[id]).join(' & ')}
+                        <span className="bt-mono" style={{ color: TOKENS.text, marginLeft: 10 }}>
+                          {winScore || 0}–{loseScore || 0}
+                        </span>
                       </div>
                       );
                     })}
