@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// Paste this into Firebase Console -> Firestore Database -> Rules -> Publish.
+// It is not deployed automatically by anything in this repo (see SETUP.md).
+//
+// This is what actually protects league data - the app's UI hides buttons a
+// user isn't supposed to use, but only these rules stop someone from calling
+// Firestore directly (e.g. from devtools) to bypass the UI entirely.
+//
+// Known limitation: "members can only edit today/future sessions, not past
+// ones" is enforced only in the UI (index.html's `canEdit`), not here. Each
+// league is a single document with all of its sessions embedded in one array
+// field, and every save rewrites that whole array (see backend.saveLeague) -
+// there's no per-session document for a rule to check a date against. Any
+// member of a league can therefore edit a past session via a direct API call.
+// Fixing that for real would mean moving sessions into their own subcollection
+// (one doc per session, with its own `date` field a rule could compare against
+// request.time) - a bigger change than this rule set attempts.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    match /leagues/{leagueId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+
+      // createLeague() always writes the requester as owner and sole member.
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.memberUids == [request.auth.uid];
+
+      // Two distinct write shapes are allowed:
+      //  - a normal save from any current member, as long as it doesn't touch
+      //    ownership/membership/join-code (backend.saveLeague never sends
+      //    those fields, so this holds automatically for that path)
+      //  - joinByCode()'s arrayUnion, which ADDS the caller's own uid to
+      //    memberUids and changes nothing else, even before they're a member
+      allow update: if isSignedIn() && (isMemberSave() || isSelfJoin());
+
+      function isMemberSave() {
+        return request.auth.uid in resource.data.memberUids
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.joinCode == resource.data.joinCode
+          && request.resource.data.memberUids == resource.data.memberUids;
+      }
+
+      function isSelfJoin() {
+        let before = resource.data.memberUids;
+        let after = request.resource.data.memberUids;
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+          && after.hasAll(before)
+          && after.hasAll([request.auth.uid])
+          && after.size() <= before.size() + 1;
+      }
+
+      // Owner-only, matching canDeleteLeague() in index.html exactly.
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // joinByCode() looks a code up here to find its leagueId, then writes the
+    // arrayUnion above directly on the league doc.
+    match /joinCodes/{code} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['leagueId', 'ownerUid']);
+
+      allow update: if false;
+
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // One-time import path for data written by the pre-league version of this
+    // app (see backend.readLegacy / SETUP.md step 6). Delete this block and
+    // republish once you've imported and no longer need it.
+    match /badmintonLeague/{docId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

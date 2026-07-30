@@ -34,6 +34,30 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+// Combines two id-keyed lists (players, rounds) without dropping entries that
+// only exist on one side, so a concurrent write from another court/device
+// can't erase something this client never knew about.
+function mergeById(serverList, localList) {
+  const localIds = new Set(localList.map((x) => x.id));
+  const serverOnly = serverList.filter((x) => !localIds.has(x.id));
+  return [...localList, ...serverOnly];
+}
+
+function mergeSessions(serverSessions, localSessions) {
+  const localIds = new Set(localSessions.map((s) => s.id));
+  const serverOnly = serverSessions.filter((s) => !localIds.has(s.id));
+  const merged = localSessions.map((local) => {
+    const server = serverSessions.find((s) => s.id === local.id);
+    if (!server) return local;
+    return {
+      ...local,
+      attendance: Array.from(new Set([...(server.attendance || []), ...(local.attendance || [])])),
+      rounds: mergeById(server.rounds || [], local.rounds || []),
+    };
+  });
+  return [...merged, ...serverOnly];
+}
+
 // Everyone gets an account, even if they never type an email: new visitors are
 // signed in anonymously so their leagues are private to them from the start.
 // Linking Google or an email/password later upgrades that same account in place,
@@ -106,10 +130,27 @@ const backend = {
       );
   },
 
+  // A plain overwrite here would clobber sessions/players/membership that
+  // another device wrote in between this client's last snapshot and now (e.g.
+  // a teammate scoring a different court, or someone joining by code). Instead
+  // this re-reads the current server doc inside a transaction and merges
+  // sessions/rounds/players by id, so unrelated concurrent edits both survive.
+  // memberUids/ownerUid/joinCode are intentionally left out of the payload -
+  // they're only ever changed by createLeague/joinByCode, never by this path.
   saveLeague(lg) {
-    const copy = Object.assign({}, lg);
-    delete copy.id;
-    return db.collection('leagues').doc(lg.id).set(copy, { merge: true });
+    const ref = db.collection('leagues').doc(lg.id);
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const server = snap.exists ? snap.data() : {};
+      const payload = {
+        name: lg.name,
+        photo: lg.photo,
+        defaultCourts: lg.defaultCourts,
+        players: mergeById(server.players || [], lg.players || []),
+        sessions: mergeSessions(server.sessions || [], lg.sessions || []),
+      };
+      tx.set(ref, payload, { merge: true });
+    });
   },
 
   async createLeague(lg) {
@@ -881,10 +922,13 @@ function BadmintonTracker() {
   const canEdit = adminMode || !isPastDate;
   const canDelete = adminMode;
 
+  // Deleting a league is owner-only, full stop - this mirrors firestore.rules
+  // exactly so the button never promises something the backend will reject.
+  // (An earlier version also let any member delete a league within 24h of its
+  // creation, but that window can't be verified server-side since createdAt is
+  // a plain string, not a Firestore timestamp - so it's gone from both sides.)
   function canDeleteLeague(lg) {
-    if (!lg) return false;
-    if (user && lg.ownerUid === user.uid) return true;
-    return Date.now() - new Date(lg.createdAt).getTime() < 24 * 60 * 60 * 1000;
+    return !!lg && !!user && lg.ownerUid === user.uid;
   }
 
   function updateSessions(fn) {
@@ -1520,9 +1564,11 @@ function BadmintonTracker() {
                                   <button onClick={() => openEditTeams(r)} title="Fix player selection" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                                     <Pencil size={16} />
                                   </button>
-                                  <button onClick={() => reshuffleRound(r.id)} title="Reshuffle" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
-                                    <RotateCcw size={16} className={spinId === r.id ? 'bt-spin' : ''} />
-                                  </button>
+                                  {!decided && (
+                                    <button onClick={() => reshuffleRound(r.id)} title="Reshuffle" className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
+                                      <RotateCcw size={16} className={spinId === r.id ? 'bt-spin' : ''} />
+                                    </button>
+                                  )}
                                 </>
                               )}
                               {canDelete && (
