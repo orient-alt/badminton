@@ -226,6 +226,10 @@ const BASE_CSS = `
   }
   .bt-photo:hover .bt-photo-overlay, .bt-photo:focus-within .bt-photo-overlay { opacity: 1; }
   @media (hover: none) { .bt-photo-overlay { opacity: 0.85; } }
+  .bt-chip-editable { cursor: default; }
+  .bt-chip-edit-icon { opacity: 0; transition: opacity 120ms ease; background: none; border: none; cursor: pointer; padding: 2px; }
+  .bt-chip-editable:hover .bt-chip-edit-icon, .bt-chip-editable:focus-within .bt-chip-edit-icon { opacity: 1; }
+  @media (hover: none) { .bt-chip-edit-icon { opacity: 0.7; } }
 `;
 
 function makeIcon(glyph) {
@@ -669,6 +673,8 @@ function BadmintonTracker() {
   const [spinId, setSpinId] = useState(null);
   const [editingRoundId, setEditingRoundId] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
+  const [nextDraft, setNextDraft] = useState(null);
+  const [editingPlayerId, setEditingPlayerId] = useState(null);
   const [standingsScope, setStandingsScope] = useState('alltime');
   const [viewerMode, setViewerMode] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -736,7 +742,11 @@ function BadmintonTracker() {
 
   useEffect(() => {
     if (!leagues || !leagues.length) return;
-    setActiveLeagueId((prev) => (prev && leagues.some((l) => l.id === prev) ? prev : leagues[0].id));
+    setActiveLeagueId((prev) => {
+      if (prev && leagues.some((l) => l.id === prev)) return prev;
+      const champions = leagues.find((l) => l.name === 'Badminton Champions');
+      return (champions || leagues[0]).id;
+    });
   }, [leagues]);
 
   useEffect(() => {
@@ -945,6 +955,7 @@ function BadmintonTracker() {
     const present = players.filter((p) => draftAttendance && draftAttendance[p.id]).map((p) => p.id);
     updateSessions((prev) => [...prev, { id: uid('s'), date: selectedDate, mode: draftMode, attendance: present, rounds: [], courts: draftCourts }]);
     setSelectedCourt(1);
+    setNextDraft(null);
   }
 
   function updateSession(patch) {
@@ -957,18 +968,88 @@ function BadmintonTracker() {
     setSelectedCourt(next);
   }
 
+  // A round is "live" until it has a decided score - used to stop a court from
+  // being double-booked and to stop a player being placed in two games at once.
+  function isRoundLive(r) {
+    const ra = Number(r.scoreA),
+      rb = Number(r.scoreB);
+    const decided = r.scoreA !== '' && r.scoreB !== '' && !isNaN(ra) && !isNaN(rb) && ra !== rb;
+    return !decided;
+  }
+
+  function courtHasLiveGame(court, ignoreRoundId) {
+    return activeSession.rounds.some((r) => (r.court || 1) === court && r.id !== ignoreRoundId && isRoundLive(r));
+  }
+
+  function currentTargetCourt() {
+    return Math.min(selectedCourt, activeSession.courts || 1);
+  }
+
+  function busyCourtForPlayer(id) {
+    const r = activeSession.rounds.find((rr) => isRoundLive(rr) && (rr.teamA.includes(id) || rr.teamB.includes(id)));
+    return r ? r.court || 1 : null;
+  }
+
+  // Everyone present who isn't currently locked into a different live game -
+  // i.e. free to be placed in a new round, or kept in the one they're already in.
+  function freeIdsForRound(ignoreRoundId) {
+    return activeSession.attendance.filter((id) => {
+      const busyElsewhere = activeSession.rounds.some(
+        (r) => r.id !== ignoreRoundId && isRoundLive(r) && (r.teamA.includes(id) || r.teamB.includes(id))
+      );
+      return !busyElsewhere;
+    });
+  }
+
   function addRound() {
     const court = Math.min(selectedCourt, activeSession.courts || 1);
-    const round = pickRound(activeSession.mode, activeSession.attendance, activeSession.rounds, partnerCounts, court);
+    if (courtHasLiveGame(court)) return;
+    const round = pickRound(activeSession.mode, freeIdsForRound(null), activeSession.rounds, partnerCounts, court);
     if (!round) return;
     updateSession({ rounds: [...activeSession.rounds, round] });
   }
 
   function addManualRound() {
     const court = Math.min(selectedCourt, activeSession.courts || 1);
-    const round = blankRound(activeSession.mode, activeSession.attendance, court);
+    if (courtHasLiveGame(court)) return;
+    const round = blankRound(activeSession.mode, freeIdsForRound(null), court);
     updateSession({ rounds: [...activeSession.rounds, round] });
     openEditTeams(round);
+  }
+
+  // The NEXT GAME panel lets someone stage a matchup ahead of time without it
+  // going live immediately - nextDraft is re-validated against free players
+  // the moment Start is actually clicked, not when it was first drafted.
+  function nextDraftNeed() {
+    return activeSession.mode === 'doubles' ? 2 : 1;
+  }
+
+  function currentNextDraft() {
+    const need = nextDraftNeed();
+    if (nextDraft && nextDraft.a.length === need && nextDraft.b.length === need) return nextDraft;
+    return { a: Array(need).fill(''), b: Array(need).fill('') };
+  }
+
+  function randomizeNextGame() {
+    const court = Math.min(selectedCourt, activeSession.courts || 1);
+    const picked = pickRound(activeSession.mode, freeIdsForRound(null), activeSession.rounds, partnerCounts, court);
+    if (!picked) return;
+    setNextDraft({ a: picked.teamA, b: picked.teamB });
+  }
+
+  function startNextGame() {
+    const court = Math.min(selectedCourt, activeSession.courts || 1);
+    if (courtHasLiveGame(court)) return;
+    const draft = currentNextDraft();
+    const need = nextDraftNeed();
+    const a = draft.a.filter(Boolean);
+    const b = draft.b.filter(Boolean);
+    if (a.length !== need || b.length !== need || new Set([...a, ...b]).size !== a.length + b.length) return;
+    const chosen = new Set([...a, ...b]);
+    const resting = activeSession.attendance.filter((id) => !chosen.has(id));
+    const round = { id: uid('r'), teamA: a, teamB: b, resting, scoreA: '', scoreB: '', court };
+    updateSession({ rounds: [...activeSession.rounds, round] });
+    setNextDraft(null);
   }
 
   function openEditTeams(round) {
@@ -1012,7 +1093,7 @@ function BadmintonTracker() {
     setTimeout(() => setSpinId(null), 400);
     const priorRounds = activeSession.rounds.slice(0, idx);
     const existingCourt = activeSession.rounds[idx].court || 1;
-    const fresh = pickRound(activeSession.mode, activeSession.attendance, priorRounds, partnerCounts, existingCourt);
+    const fresh = pickRound(activeSession.mode, freeIdsForRound(roundId), priorRounds, partnerCounts, existingCourt);
     if (!fresh) return;
     const newRounds = [...activeSession.rounds];
     newRounds[idx] = { ...fresh, id: roundId, scoreA: newRounds[idx].scoreA, scoreB: newRounds[idx].scoreB };
@@ -1089,18 +1170,6 @@ function BadmintonTracker() {
     }
   }
 
-  const queueIds = activeSession
-    ? activeSession.attendance.filter((id) => {
-        const busy = activeSession.rounds.some((r) => {
-          const ra = Number(r.scoreA),
-            rb = Number(r.scoreB);
-          const rDecided = r.scoreA !== '' && r.scoreB !== '' && !isNaN(ra) && !isNaN(rb) && ra !== rb;
-          return !rDecided && (r.teamA.includes(id) || r.teamB.includes(id));
-        });
-        return !busy;
-      })
-    : [];
-
   const pastSessions = [...sessions].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   return (
@@ -1169,28 +1238,34 @@ function BadmintonTracker() {
           <input ref={photoInputRef} type="file" accept="image/*" onChange={onPickLeaguePhoto} style={{ display: 'none' }} />
         </div>
 
-        {leagues.length > 1 ? (
-          <select
-            value={league.id}
-            onChange={(e) => {
-              setActiveLeagueId(e.target.value);
-              setDraftAttendance(null);
-              setTab('today');
-            }}
-            className="bt-display"
-            style={{ background: TOKENS.text, color: '#0B0D10', border: `1px solid ${TOKENS.text}`, borderRadius: 10, padding: '8px 12px', fontSize: 19, fontWeight: 700 }}
-          >
-            {leagues.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span className="bt-display" style={{ background: TOKENS.text, color: '#0B0D10', borderRadius: 10, padding: '7px 14px', fontSize: 20, fontWeight: 700 }}>
-            {league.name}
+        <div className="flex flex-col" style={{ gap: 3 }}>
+          <span className="bt-display" style={{ fontSize: 10, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.1em', paddingLeft: 2 }}>
+            LEAGUE NAME
           </span>
-        )}
+          {leagues.length > 1 ? (
+            <select
+              value={league.id}
+              onChange={(e) => {
+                setActiveLeagueId(e.target.value);
+                setDraftAttendance(null);
+                setNextDraft(null);
+                setTab('today');
+              }}
+              className="bt-display"
+              style={{ background: TOKENS.text, color: '#0B0D10', border: `1px solid ${TOKENS.text}`, borderRadius: 10, padding: '8px 12px', fontSize: 19, fontWeight: 700 }}
+            >
+              {leagues.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="bt-display" style={{ background: TOKENS.text, color: '#0B0D10', borderRadius: 10, padding: '7px 14px', fontSize: 20, fontWeight: 700 }}>
+              {league.name}
+            </span>
+          )}
+        </div>
 
         <button onClick={openCreatePanel} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold" style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}>
           <Plus size={13} /> New League
@@ -1449,6 +1524,7 @@ function BadmintonTracker() {
                   onChange={(e) => {
                     setSelectedDate(e.target.value);
                     setDraftAttendance(null);
+                    setNextDraft(null);
                   }}
                   style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px' }}
                 />
@@ -1511,23 +1587,23 @@ function BadmintonTracker() {
               ) : (
                 <div>
                   <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                    <div style={{ color: TOKENS.textDim, fontSize: 14 }}>
-                      {activeSession.attendance.length} present · {titleMode(activeSession.mode)} · {activeSession.rounds.length} game
-                      {activeSession.rounds.length === 1 ? '' : 's'} logged · {activeSession.courts || 1} court
-                      {(activeSession.courts || 1) === 1 ? '' : 's'}
-                    </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div style={{ color: TOKENS.textDim, fontSize: 14 }}>
+                        {activeSession.attendance.length} present · {titleMode(activeSession.mode)} · {activeSession.rounds.length} game
+                        {activeSession.rounds.length === 1 ? '' : 's'} logged · {activeSession.courts || 1} court
+                        {(activeSession.courts || 1) === 1 ? '' : 's'}
+                      </div>
                       {canEdit && (
                         <button onClick={addCourt} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.teal }}>
                           <Plus size={14} /> Add court
                         </button>
                       )}
-                      {canDelete && (
-                        <button onClick={() => deleteSession(activeSession.id)} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.loss }}>
-                          <Trash2 size={14} /> Clear session
-                        </button>
-                      )}
                     </div>
+                    {canDelete && (
+                      <button onClick={() => deleteSession(activeSession.id)} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.loss }}>
+                        <Trash2 size={14} /> Clear session
+                      </button>
+                    )}
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14, marginBottom: 16 }}>
@@ -1596,7 +1672,7 @@ function BadmintonTracker() {
                                         style={{ display: 'block', marginBottom: 6, background: TOKENS.surface, color: TOKENS.text, border: `1px solid ${TOKENS.line}`, borderRadius: 6, padding: '4px 8px' }}
                                       >
                                         <option value="">Select player…</option>
-                                        {activeSession.attendance
+                                        {freeIdsForRound(r.id)
                                           .filter((id) => id === val || (!editDraft.a.includes(id) && !editDraft.b.includes(id)))
                                           .map((id) => (
                                             <option key={id} value={id}>
@@ -1620,7 +1696,7 @@ function BadmintonTracker() {
                                         style={{ display: 'block', marginBottom: 6, background: TOKENS.surface, color: TOKENS.text, border: `1px solid ${TOKENS.line}`, borderRadius: 6, padding: '4px 8px' }}
                                       >
                                         <option value="">Select player…</option>
-                                        {activeSession.attendance
+                                        {freeIdsForRound(r.id)
                                           .filter((id) => id === val || (!editDraft.a.includes(id) && !editDraft.b.includes(id)))
                                           .map((id) => (
                                             <option key={id} value={id}>
@@ -1711,67 +1787,174 @@ function BadmintonTracker() {
                     })}
                   </div>
 
-                  {queueIds.length > 0 && (
-                    <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14, marginBottom: 16, maxWidth: 620 }}>
-                      <div className="flex items-center gap-2 mb-2">
-                        <Users size={15} style={{ color: TOKENS.textDim }} />
-                        <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
-                          {adminMode ? 'QUEUE' : 'PLAYERS PRESENT'} ({queueIds.length})
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {queueIds.map((id, qi) => (
-                          <span key={id} className="bt-mono" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, borderRadius: 999, padding: '4px 10px', fontSize: 13, border: `1px solid ${TOKENS.line}` }}>
-                            {qi + 1}. {playersById[id]}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {canEdit && (
-                    <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14, marginBottom: 16, maxWidth: 620 }}>
-                      <div className="flex items-center gap-2 mb-3">
-                        <Pencil size={14} style={{ color: TOKENS.textDim }} />
-                        <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
-                          PLAYER NAMES
-                        </span>
-                      </div>
-                      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
-                        {activeSession.attendance.map((id) => (
-                          <input
-                            key={id}
-                            value={playersById[id] || ''}
-                            onChange={(e) => renamePlayer(id, e.target.value)}
-                            style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text, width: '100%' }}
-                          />
-                        ))}
-                      </div>
-                      <button onClick={addPlayerToSession} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold mt-3" style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}>
-                        <Plus size={13} /> Add player
-                      </button>
-                    </div>
-                  )}
-
                   {canEdit && (activeSession.courts || 1) > 1 && (
-                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <div className="flex items-center gap-2 mb-3 flex-wrap">
                       <span style={{ color: TOKENS.textDim, fontSize: 13 }}>New game for:</span>
                       {Array.from({ length: activeSession.courts || 1 }, (_, i) => i + 1).map((cnum) => (
                         <Chip key={cnum} active={selectedCourt === cnum} onClick={() => setSelectedCourt(cnum)} color={TOKENS.gold}>
                           Court {cnum}
+                          {courtHasLiveGame(cnum) ? ' · live' : ''}
                         </Chip>
                       ))}
                     </div>
                   )}
 
                   {canEdit && (
-                    <div className="flex gap-2 flex-wrap">
-                      <button onClick={addRound} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}>
+                    <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.teal}`, borderRadius: 14, padding: 14, marginBottom: 16 }}>
+                      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                        <span className="bt-display" style={{ fontSize: 15, fontWeight: 700, color: TOKENS.gold, letterSpacing: '0.04em' }}>
+                          NEXT GAME · Court {currentTargetCourt()}
+                        </span>
+                        {!courtHasLiveGame(currentTargetCourt()) && (
+                          <button onClick={randomizeNextGame} className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: TOKENS.teal }}>
+                            <Shuffle size={14} /> Randomize
+                          </button>
+                        )}
+                      </div>
+                      {courtHasLiveGame(currentTargetCourt()) ? (
+                        <div style={{ color: TOKENS.textDim, fontSize: 13 }}>
+                          Court {currentTargetCourt()} already has a live game — enter its score (or pick a different court above) before starting the next one.
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap gap-4 mb-3">
+                            {[
+                              ['Team A', 'a'],
+                              ['Team B', 'b'],
+                            ].map(([label, side]) => (
+                              <div key={side}>
+                                <div style={{ fontSize: 12, color: TOKENS.textDim, marginBottom: 4 }}>{label}</div>
+                                {currentNextDraft()[side].map((val, slot) => (
+                                  <select
+                                    key={slot}
+                                    value={val}
+                                    onChange={(e) => {
+                                      const draft = currentNextDraft();
+                                      const arr = [...draft[side]];
+                                      arr[slot] = e.target.value;
+                                      setNextDraft({ ...draft, [side]: arr });
+                                    }}
+                                    style={{ display: 'block', marginBottom: 6, background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}`, borderRadius: 6, padding: '4px 8px' }}
+                                  >
+                                    <option value="">Select player…</option>
+                                    {freeIdsForRound(null)
+                                      .filter((id) => id === val || (!currentNextDraft().a.includes(id) && !currentNextDraft().b.includes(id)))
+                                      .map((id) => (
+                                        <option key={id} value={id}>
+                                          {playersById[id]}
+                                        </option>
+                                      ))}
+                                  </select>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            onClick={startNextGame}
+                            disabled={currentNextDraft().a.filter(Boolean).length !== nextDraftNeed() || currentNextDraft().b.filter(Boolean).length !== nextDraftNeed()}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold"
+                            style={{
+                              background: TOKENS.teal,
+                              color: '#0B0D10',
+                              opacity: currentNextDraft().a.filter(Boolean).length !== nextDraftNeed() || currentNextDraft().b.filter(Boolean).length !== nextDraftNeed() ? 0.5 : 1,
+                            }}
+                          >
+                            <Check size={14} /> Start game
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {canEdit && (
+                    <div className="flex gap-2 flex-wrap items-center mb-4">
+                      <button
+                        onClick={addRound}
+                        disabled={courtHasLiveGame(currentTargetCourt())}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold"
+                        style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}`, opacity: courtHasLiveGame(currentTargetCourt()) ? 0.5 : 1 }}
+                      >
                         <Shuffle size={16} /> Shuffle next game
                       </button>
-                      <button onClick={addManualRound} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
+                      <button
+                        onClick={addManualRound}
+                        disabled={courtHasLiveGame(currentTargetCourt())}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold"
+                        style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}`, opacity: courtHasLiveGame(currentTargetCourt()) ? 0.5 : 1 }}
+                      >
                         <Pencil size={16} /> Pick players manually
                       </button>
+                    </div>
+                  )}
+
+                  {activeSession.attendance.length > 0 && (
+                    <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <Users size={15} style={{ color: TOKENS.textDim }} />
+                        <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
+                          {adminMode ? 'QUEUE' : 'PLAYERS PRESENT'} ({activeSession.attendance.length})
+                        </span>
+                        {canEdit && (
+                          <span style={{ color: TOKENS.textDim, fontSize: 11 }}>· hover or right-click a name to rename</span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {(() => {
+                          let qn = 0;
+                          return activeSession.attendance.map((id) => {
+                            const busyCourt = busyCourtForPlayer(id);
+                            const num = busyCourt ? null : ++qn;
+                            if (editingPlayerId === id) {
+                              return (
+                                <input
+                                  key={id}
+                                  autoFocus
+                                  value={playersById[id] || ''}
+                                  onChange={(e) => renamePlayer(id, e.target.value)}
+                                  onBlur={() => setEditingPlayerId(null)}
+                                  onKeyDown={(e) => e.key === 'Enter' && setEditingPlayerId(null)}
+                                  className="bt-mono"
+                                  style={{ background: TOKENS.surface, color: TOKENS.text, borderRadius: 999, padding: '4px 10px', fontSize: 13, border: `1px solid ${TOKENS.teal}`, width: 120 }}
+                                />
+                              );
+                            }
+                            return (
+                              <span
+                                key={id}
+                                className={canEdit ? 'bt-mono bt-chip-editable' : 'bt-mono'}
+                                onContextMenu={(e) => {
+                                  if (!canEdit) return;
+                                  e.preventDefault();
+                                  setEditingPlayerId(id);
+                                }}
+                                style={{
+                                  background: busyCourt ? TOKENS.surface : TOKENS.surfaceAlt,
+                                  color: busyCourt ? TOKENS.textDim : TOKENS.text,
+                                  borderRadius: 999,
+                                  padding: '4px 6px 4px 10px',
+                                  fontSize: 13,
+                                  border: `1px solid ${TOKENS.line}`,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                {busyCourt ? `Court ${busyCourt} · ${playersById[id]}` : `${num}. ${playersById[id]}`}
+                                {canEdit && (
+                                  <button onClick={() => setEditingPlayerId(id)} title="Rename" className="bt-chip-edit-icon" style={{ color: TOKENS.textDim, display: 'inline-flex' }}>
+                                    <Pencil size={11} />
+                                  </button>
+                                )}
+                              </span>
+                            );
+                          });
+                        })()}
+                      </div>
+                      {canEdit && (
+                        <button onClick={addPlayerToSession} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold mt-3" style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}>
+                          <Plus size={13} /> Add player
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
