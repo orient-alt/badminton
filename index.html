@@ -8,8 +8,8 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<!-- Firebase (compat build - works with plain <script> tags, no bundler needed) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   html, body { background: #12151A; margin: 0; padding: 0; min-height: 100%; }
@@ -21,9 +21,6 @@
 <script type="text/plain" id="app-source">
 const { useState, useEffect, useRef } = React;
 
-// ============================================================
-// Firebase project config (from Firebase console > Project settings)
-// ============================================================
 const firebaseConfig = {
   apiKey: "AIzaSyCzA2FEEUEYpXc0IClP-WJ7KEdXmQhqpJk",
   authDomain: "office-badminton.firebaseapp.com",
@@ -34,22 +31,124 @@ const firebaseConfig = {
 };
 
 firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
 const db = firebase.firestore();
-const docRef = db.collection('badmintonLeague').doc('data');
 
-// Persistence adapter: live-syncs one shared document across every browser.
-const persistence = {
-  subscribe(cb) {
-    return docRef.onSnapshot(
-      (snap) => cb(snap.exists ? snap.data() : null),
-      (err) => {
-        console.error('Firestore read failed - check firebaseConfig and security rules.', err);
-        cb(null);
+// Everyone gets an account, even if they never type an email: new visitors are
+// signed in anonymously so their leagues are private to them from the start.
+// Linking Google or an email/password later upgrades that same account in place,
+// so nothing they've already created is lost.
+const backend = {
+  supportsAccounts: true,
+
+  onAuth(cb) {
+    return auth.onAuthStateChanged(function (u) {
+      if (!u) {
+        auth.signInAnonymously().catch(function (e) {
+          console.error('Anonymous sign-in failed', e);
+          cb(null);
+        });
+        return; // onAuthStateChanged fires again once the guest account exists
       }
-    );
+      cb({ uid: u.uid, email: u.email, displayName: u.displayName, isAnonymous: u.isAnonymous });
+    });
   },
-  save(data) {
-    return docRef.set(data);
+
+  async signInGoogle() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    const current = auth.currentUser;
+    if (current && current.isAnonymous) {
+      try {
+        await current.linkWithPopup(provider);
+        return;
+      } catch (e) {
+        // The Google account already exists as its own user; sign into it instead.
+        if (e.code === 'auth/credential-already-in-use' || e.code === 'auth/email-already-in-use') {
+          await auth.signInWithPopup(provider);
+          return;
+        }
+        throw e;
+      }
+    }
+    await auth.signInWithPopup(provider);
+  },
+
+  async signUpEmail(email, pw) {
+    const current = auth.currentUser;
+    if (current && current.isAnonymous) {
+      const cred = firebase.auth.EmailAuthProvider.credential(email, pw);
+      await current.linkWithCredential(cred);
+      return;
+    }
+    await auth.createUserWithEmailAndPassword(email, pw);
+  },
+
+  async signInEmail(email, pw) {
+    await auth.signInWithEmailAndPassword(email, pw);
+  },
+
+  async signOut() {
+    await auth.signOut(); // onAuth immediately creates a fresh guest account
+  },
+
+  subscribeLeagues(uid, cb) {
+    return db
+      .collection('leagues')
+      .where('memberUids', 'array-contains', uid)
+      .onSnapshot(
+        function (snap) {
+          cb(snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); }));
+        },
+        function (err) {
+          console.error('League subscription failed', err);
+          cb([]);
+        }
+      );
+  },
+
+  saveLeague(lg) {
+    const copy = Object.assign({}, lg);
+    delete copy.id;
+    return db.collection('leagues').doc(lg.id).set(copy, { merge: true });
+  },
+
+  async createLeague(lg) {
+    const copy = Object.assign({}, lg);
+    delete copy.id;
+    await db.collection('leagues').doc(lg.id).set(copy);
+    await db.collection('joinCodes').doc(lg.joinCode).set({ leagueId: lg.id, ownerUid: lg.ownerUid });
+  },
+
+  async deleteLeague(lg) {
+    await db.collection('leagues').doc(lg.id).delete();
+    if (lg.joinCode) {
+      try {
+        await db.collection('joinCodes').doc(lg.joinCode).delete();
+      } catch (e) {
+        /* code entry may already be gone */
+      }
+    }
+  },
+
+  async joinByCode(code, uid) {
+    const snap = await db.collection('joinCodes').doc(code).get();
+    if (!snap.exists) return { ok: false, error: 'No league found with that code.' };
+    const leagueId = snap.data().leagueId;
+    // arrayUnion lets someone add only themselves without first reading the
+    // league, which they are not yet allowed to do.
+    await db.collection('leagues').doc(leagueId).update({
+      memberUids: firebase.firestore.FieldValue.arrayUnion(uid),
+    });
+    return { ok: true, leagueId: leagueId };
+  },
+
+  async readLegacy() {
+    try {
+      const s = await db.collection('badmintonLeague').doc('data').get();
+      return s.exists ? s.data() : null;
+    } catch (e) {
+      return null;
+    }
   },
 };
 
@@ -66,6 +165,27 @@ const TOKENS = {
   win: '#5FBF77',
   loss: '#E2585B',
 };
+
+const BASE_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+  .bt-display { font-family: 'Barlow Condensed', sans-serif; letter-spacing: 0.02em; }
+  .bt-mono { font-family: 'JetBrains Mono', monospace; }
+  .bt-scale-in { animation: bt-pop 300ms ease; }
+  @keyframes bt-pop { from { transform: scale(0.9); opacity: 0.4; } to { transform: scale(1); opacity: 1; } }
+  .bt-spin { animation: bt-spin 400ms ease; }
+  .bt-live-dot { animation: bt-pulse-dot 1.4s ease-in-out infinite; }
+  @keyframes bt-pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @keyframes bt-spin { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }
+  .bt-scorebox::-webkit-inner-spin-button, .bt-scorebox::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .bt-photo { position: relative; cursor: pointer; border-radius: 10px; }
+  .bt-photo-overlay {
+    position: absolute; inset: 0; border-radius: 10px; background: rgba(0,0,0,0.62);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    opacity: 0; transition: opacity 150ms ease; font-size: 15px;
+  }
+  .bt-photo:hover .bt-photo-overlay, .bt-photo:focus-within .bt-photo-overlay { opacity: 1; }
+  @media (hover: none) { .bt-photo-overlay { opacity: 0.85; } }
+`;
 
 function makeIcon(glyph) {
   return function Icon({ size = 16, className = '', style = {} }) {
@@ -85,9 +205,7 @@ const ChevronUp = makeIcon('▴');
 const CalendarDays = makeIcon('📅');
 const Pencil = makeIcon('✎');
 const ArrowLeftRight = makeIcon('⇄');
-const Lock = makeIcon('🔒');
-const Eye = makeIcon('👁️');
-const EyeOff = makeIcon('🙈');
+const KeyIcon = makeIcon('🔑');
 
 function ShuttleIcon({ size = 26, style = {} }) {
   return (
@@ -119,6 +237,14 @@ function uid(prefix = 'id') {
   return prefix + '_' + Math.random().toString(36).slice(2, 9);
 }
 
+// Ambiguous characters (0/O, 1/I) are left out so codes are easy to read aloud.
+function genJoinCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out;
+}
+
 function todayISO() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -138,59 +264,38 @@ function titleMode(mode) {
   return mode === 'singles' ? 'Singles' : 'Doubles';
 }
 
-function defaultPlayers(n = 7) {
+function defaultPlayers(n = 4) {
   return Array.from({ length: n }, (_, i) => ({ id: uid('p'), name: `Player ${i + 1}` }));
 }
 
-function newLeagueObj(name, players, defaultCourts, photo) {
+function makeLeague({ name, players, defaultCourts, photo, ownerUid }) {
   return {
     id: uid('lg'),
     name: name,
     photo: photo || null,
     createdAt: new Date().toISOString(),
     defaultCourts: defaultCourts || 1,
+    ownerUid: ownerUid,
+    memberUids: [ownerUid],
+    joinCode: genJoinCode(),
     players: players && players.length ? players : defaultPlayers(),
     sessions: [],
   };
 }
 
-// Accepts either the current multi-league shape or the older single-league shape
-// and always returns the multi-league shape.
-function normalizeData(raw) {
-  const fallbackPasscode = '1234';
-  if (!raw) {
-    const lg = newLeagueObj('Badminton Champions', defaultPlayers(), 1, null);
-    return { leagues: [lg], settings: { passcode: fallbackPasscode } };
-  }
-  if (Array.isArray(raw.leagues) && raw.leagues.length) {
-    return {
-      leagues: raw.leagues.map((l) => ({
-        id: l.id || uid('lg'),
-        name: l.name || 'Untitled League',
-        photo: l.photo || null,
-        createdAt: l.createdAt || '2020-01-01T00:00:00.000Z',
-        defaultCourts: l.defaultCourts || 1,
-        players: l.players && l.players.length ? l.players : defaultPlayers(),
-        sessions: l.sessions || [],
-      })),
-      settings: raw.settings || { passcode: fallbackPasscode },
-    };
-  }
-  // Legacy single-league document -> becomes "Badminton Champions".
-  // createdAt is intentionally old so the 24h viewer-delete window has passed.
+// Fills in anything an older or partially-written league document might be missing.
+function normalizeLeague(l) {
   return {
-    leagues: [
-      {
-        id: uid('lg'),
-        name: 'Badminton Champions',
-        photo: null,
-        createdAt: '2020-01-01T00:00:00.000Z',
-        defaultCourts: 1,
-        players: raw.players && raw.players.length ? raw.players : defaultPlayers(),
-        sessions: raw.sessions || [],
-      },
-    ],
-    settings: raw.settings || { passcode: fallbackPasscode },
+    id: l.id,
+    name: l.name || 'Untitled League',
+    photo: l.photo || null,
+    createdAt: l.createdAt || '2020-01-01T00:00:00.000Z',
+    defaultCourts: l.defaultCourts || 1,
+    ownerUid: l.ownerUid || null,
+    memberUids: l.memberUids || [],
+    joinCode: l.joinCode || '',
+    players: l.players && l.players.length ? l.players : defaultPlayers(),
+    sessions: l.sessions || [],
   };
 }
 
@@ -330,8 +435,8 @@ function computeTopDuo(players, sessions) {
   return list[0] || null;
 }
 
-// Downscales and crops an image file to a small square JPEG data URL so it stays
-// well under the database's per-document size limit.
+// Downscales and crops an image to a small square JPEG so league photos stay
+// far below the database's per-document size limit.
 function fileToSquareDataUrl(file, size = 160) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -378,30 +483,141 @@ function Chip({ children, active, onClick, color, disabled }) {
   );
 }
 
-function LeagueAvatar({ photo, size = 40 }) {
+function LeagueAvatar({ photo, size = 46 }) {
   if (photo) {
-    return (
-      <img
-        src={photo}
-        alt=""
-        style={{ width: size, height: size, borderRadius: 10, objectFit: 'cover', display: 'block', flexShrink: 0 }}
-      />
-    );
+    return <img src={photo} alt="" style={{ width: size, height: size, borderRadius: 10, objectFit: 'cover', display: 'block' }} />;
   }
   return (
     <div
       className="flex items-center justify-center"
-      style={{ width: size, height: size, borderRadius: 10, background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, flexShrink: 0 }}
+      style={{ width: size, height: size, borderRadius: 10, background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}` }}
     >
       <ShuttleIcon size={Math.round(size * 0.62)} style={{ color: TOKENS.line }} />
     </div>
   );
 }
 
+function CreateLeaguePanel({ draftLeague, setDraftLeague, onCancel, onCreate, photoInputRef, onPickPhoto }) {
+  return (
+    <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 18, maxWidth: 620, marginTop: 16 }}>
+      <div className="flex items-center justify-between mb-4">
+        <span className="bt-display" style={{ fontSize: 20, fontWeight: 700 }}>
+          NEW LEAGUE
+        </span>
+        <button onClick={onCancel} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
+          <X size={18} />
+        </button>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>League name</div>
+        <input
+          value={draftLeague.name}
+          onChange={(e) => setDraftLeague({ ...draftLeague, name: e.target.value })}
+          placeholder="e.g. Friday Night Smash"
+          style={{ width: '100%', background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '8px 10px', color: TOKENS.text }}
+        />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>League photo (optional)</div>
+        <div className="flex items-center gap-3">
+          <LeagueAvatar photo={draftLeague.photo} size={54} />
+          <button onClick={() => photoInputRef.current && photoInputRef.current.click()} className="px-3 py-1.5 rounded-lg text-sm" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
+            {draftLeague.photo ? 'Replace' : 'Upload'}
+          </button>
+          {draftLeague.photo && (
+            <button onClick={() => setDraftLeague({ ...draftLeague, photo: null })} className="text-sm" style={{ color: TOKENS.textDim }}>
+              Remove
+            </button>
+          )}
+          <input ref={photoInputRef} type="file" accept="image/*" onChange={onPickPhoto} style={{ display: 'none' }} />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>Number of courts</div>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setDraftLeague({ ...draftLeague, courts: Math.max(1, (draftLeague.courts || 1) - 1) })} className="px-2.5 py-1 rounded-lg font-semibold" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
+            −
+          </button>
+          <span className="bt-mono" style={{ fontWeight: 700, minWidth: 20, textAlign: 'center' }}>
+            {draftLeague.courts || 1}
+          </span>
+          <button onClick={() => setDraftLeague({ ...draftLeague, courts: (draftLeague.courts || 1) + 1 })} className="px-2.5 py-1 rounded-lg font-semibold" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
+            +
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>Players</div>
+        <div className="grid gap-2">
+          {draftLeague.playerNames.map((n, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <input
+                value={n}
+                onChange={(e) => {
+                  const next = [...draftLeague.playerNames];
+                  next[idx] = e.target.value;
+                  setDraftLeague({ ...draftLeague, playerNames: next });
+                }}
+                placeholder={`Player ${idx + 1}`}
+                style={{ flex: 1, background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text }}
+              />
+              {draftLeague.playerNames.length > 1 && (
+                <button onClick={() => setDraftLeague({ ...draftLeague, playerNames: draftLeague.playerNames.filter((_, i) => i !== idx) })} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
+                  <X size={15} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <button onClick={() => setDraftLeague({ ...draftLeague, playerNames: [...draftLeague.playerNames, ''] })} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold mt-2" style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}>
+          <Plus size={13} /> Add player
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button onClick={onCreate} disabled={!(draftLeague.name || '').trim()} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.teal, color: '#0B0D10', opacity: (draftLeague.name || '').trim() ? 1 : 0.5 }}>
+          <Check size={14} /> Create league
+        </button>
+        <button onClick={onCancel} className="px-4 py-2 rounded-lg" style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}>
+          Cancel
+        </button>
+      </div>
+      <div style={{ color: TOKENS.textDim, fontSize: 12, marginTop: 12 }}>
+        You'll be this league's Admin. Share its join code so teammates can score alongside you.
+      </div>
+    </div>
+  );
+}
+
+function JoinBox({ joinCodeInput, setJoinCodeInput, joinMsg, onJoin }) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          value={joinCodeInput}
+          onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+          placeholder="ABC123"
+          className="bt-mono"
+          style={{ width: 130, background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '8px 10px', color: TOKENS.text, letterSpacing: '0.1em' }}
+        />
+        <button onClick={onJoin} className="px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.teal, color: '#0B0D10' }}>
+          Join
+        </button>
+      </div>
+      {joinMsg && <div style={{ color: TOKENS.textDim, fontSize: 13, marginTop: 8 }}>{joinMsg}</div>}
+    </div>
+  );
+}
+
 function BadmintonTracker() {
-  const [data, setData] = useState(null);
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [leagues, setLeagues] = useState(null);
   const [activeLeagueId, setActiveLeagueId] = useState(null);
-  const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState('today');
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [draftAttendance, setDraftAttendance] = useState(null);
@@ -413,126 +629,277 @@ function BadmintonTracker() {
   const [editingRoundId, setEditingRoundId] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
   const [standingsScope, setStandingsScope] = useState('alltime');
-  const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const [showPasscodeBox, setShowPasscodeBox] = useState(false);
-  const [passcodeInput, setPasscodeInput] = useState('');
-  const [passcodeError, setPasscodeError] = useState(false);
-  const [showPasscodeText, setShowPasscodeText] = useState(false);
-  const [newPasscodeInput, setNewPasscodeInput] = useState('');
+  const [viewerMode, setViewerMode] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('admin');
+  const [settingsTab, setSettingsTab] = useState('account');
   const [creatingLeague, setCreatingLeague] = useState(false);
   const [draftLeague, setDraftLeague] = useState(null);
   const [photoError, setPhotoError] = useState('');
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joinMsg, setJoinMsg] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPw, setAuthPw] = useState('');
+  const [authMsg, setAuthMsg] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [legacyData, setLegacyData] = useState(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+
   const saveTimer = useRef(null);
-  const skipSave = useRef(false);
+  const dirtyRef = useRef(new Set());
   const photoInputRef = useRef(null);
   const draftPhotoInputRef = useRef(null);
 
   useEffect(() => {
-    const unsub = persistence.subscribe((raw) => {
-      const normalized = normalizeData(raw);
-      skipSave.current = true;
-      setData(normalized);
-      setActiveLeagueId((prev) => {
-        if (prev && normalized.leagues.some((l) => l.id === prev)) return prev;
-        return normalized.leagues[0].id;
-      });
-      setLoaded(true);
+    const unsub = backend.onAuth((u) => {
+      setUser(u);
+      setAuthReady(true);
     });
     return unsub;
   }, []);
 
   useEffect(() => {
-    if (!loaded || !data) return;
-    if (skipSave.current) {
-      skipSave.current = false;
+    if (!user) {
+      setLeagues(null);
       return;
     }
+    const unsub = backend.subscribeLeagues(user.uid, (list) => {
+      const normalized = list.map(normalizeLeague);
+      setLeagues((prev) => {
+        if (!prev) return normalized;
+        // Keep local copies of leagues with unsaved edits so in-flight typing
+        // isn't clobbered by an echo of our own write coming back.
+        return normalized.map((srv) => {
+          if (dirtyRef.current.has(srv.id)) {
+            const local = prev.find((p) => p.id === srv.id);
+            return local || srv;
+          }
+          return srv;
+        });
+      });
+    });
+    return unsub;
+  }, [user]);
+
+  useEffect(() => {
+    if (!leagues || dirtyRef.current.size === 0) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      Promise.resolve(persistence.save(data)).catch((e) => console.error('save failed', e));
-    }, 300);
-  }, [data, loaded]);
+      const ids = Array.from(dirtyRef.current);
+      dirtyRef.current.clear();
+      ids.forEach((id) => {
+        const lg = leagues.find((l) => l.id === id);
+        if (lg) Promise.resolve(backend.saveLeague(lg)).catch((e) => console.error('save failed', e));
+      });
+    }, 500);
+  }, [leagues]);
 
-  // Default every roster member to "present" whenever we land on a date that has
-  // no session yet (including right after switching leagues or dates).
   useEffect(() => {
-    if (!data) return;
-    const lg = data.leagues.find((l) => l.id === activeLeagueId) || data.leagues[0];
+    if (!leagues || !leagues.length) return;
+    setActiveLeagueId((prev) => (prev && leagues.some((l) => l.id === prev) ? prev : leagues[0].id));
+  }, [leagues]);
+
+  useEffect(() => {
+    if (!leagues) return;
+    const lg = leagues.find((l) => l.id === activeLeagueId);
     if (!lg) return;
-    const existing = lg.sessions.find((s) => s.date === selectedDate);
-    if (existing) return;
+    if (lg.sessions.some((s) => s.date === selectedDate)) return;
     setDraftAttendance((prev) => {
       if (prev) return prev;
       const init = {};
       lg.players.forEach((p) => (init[p.id] = true));
       return init;
     });
-  }, [data, activeLeagueId, selectedDate]);
+  }, [leagues, activeLeagueId, selectedDate]);
 
-  if (!loaded || !data) {
+  // Offer a one-time import if a document from the earlier version is still around.
+  useEffect(() => {
+    if (!user || !backend.readLegacy) return;
+    Promise.resolve(backend.readLegacy())
+      .then((d) => {
+        if (d && (d.players || d.sessions)) setLegacyData(d);
+      })
+      .catch(() => {});
+  }, [user]);
+
+  function markDirty(id) {
+    dirtyRef.current.add(id);
+  }
+
+  function patchLeague(leagueId, patch) {
+    markDirty(leagueId);
+    setLeagues((prev) => prev.map((l) => (l.id === leagueId ? { ...l, ...patch } : l)));
+  }
+
+  async function doCreateLeague(name, playerObjs, courts, photo) {
+    const lg = makeLeague({ name, players: playerObjs, defaultCourts: courts, photo, ownerUid: user.uid });
+    setLeagues((prev) => [...(prev || []), lg]);
+    setActiveLeagueId(lg.id);
+    setDraftCourts(courts);
+    try {
+      await backend.createLeague(lg);
+    } catch (e) {
+      console.error('create league failed', e);
+    }
+    return lg;
+  }
+
+  async function handleJoin() {
+    setJoinMsg('');
+    const code = joinCodeInput.trim().toUpperCase();
+    if (!code) return;
+    try {
+      const res = await backend.joinByCode(code, user.uid);
+      if (res.ok) {
+        setJoinCodeInput('');
+        setJoinMsg('Joined.');
+      } else {
+        setJoinMsg(res.error);
+      }
+    } catch (e) {
+      setJoinMsg('Could not join with that code.');
+    }
+  }
+
+  async function importLegacy() {
+    if (!legacyData) return;
+    const lg = await doCreateLeague(
+      'Badminton Champions',
+      legacyData.players && legacyData.players.length ? legacyData.players : defaultPlayers(7),
+      1,
+      null
+    );
+    if (legacyData.sessions && legacyData.sessions.length) {
+      patchLeague(lg.id, { sessions: legacyData.sessions });
+    }
+    setLegacyData(null);
+    setSettingsOpen(false);
+    setTab('today');
+  }
+
+  if (!authReady || !leagues) {
     return (
-      <div style={{ background: TOKENS.bg, color: TOKENS.textDim, minHeight: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Inter, sans-serif' }}>
-        Loading league data…
+      <div style={{ background: TOKENS.bg, color: TOKENS.textDim, minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Inter, sans-serif' }}>
+        <style>{BASE_CSS}</style>
+        Loading…
       </div>
     );
   }
 
-  const league = data.leagues.find((l) => l.id === activeLeagueId) || data.leagues[0];
+  const league = leagues.find((l) => l.id === activeLeagueId) || leagues[0] || null;
+
+  async function onPickDraftPhoto(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await fileToSquareDataUrl(file);
+      setDraftLeague((d) => ({ ...d, photo: dataUrl }));
+    } catch (err) {
+      setPhotoError("That image couldn't be processed.");
+    }
+  }
+
+  function openCreatePanel() {
+    setDraftLeague({ name: '', photo: null, courts: 1, playerNames: ['', '', '', ''] });
+    setSettingsOpen(false);
+    setCreatingLeague(true);
+  }
+
+  async function commitCreateLeague() {
+    const names = draftLeague.playerNames.map((n) => n.trim()).filter(Boolean);
+    const playerObjs = names.length ? names.map((n) => ({ id: uid('p'), name: n })) : defaultPlayers(4);
+    await doCreateLeague(draftLeague.name.trim(), playerObjs, Math.max(1, draftLeague.courts || 1), draftLeague.photo);
+    setCreatingLeague(false);
+    setDraftLeague(null);
+    setTab('today');
+    setSelectedDate(todayISO());
+    setDraftAttendance(null);
+  }
+
+  // ---- empty state: no leagues yet ---------------------------------------
+  if (!league) {
+    return (
+      <div style={{ color: TOKENS.text, fontFamily: 'Inter, system-ui, sans-serif', maxWidth: 720, margin: '0 auto', padding: 20 }}>
+        <style>{BASE_CSS}</style>
+        <div className="flex items-center gap-2 mb-6">
+          <ShuttleIcon size={32} style={{ color: TOKENS.gold }} />
+          <h1 className="bt-display" style={{ fontSize: 'clamp(18px, 5.5vw, 28px)', fontWeight: 700, lineHeight: 1.15 }}>
+            BADMINTON LEAGUE <span style={{ color: TOKENS.gold }}>SCOREBOARD</span>
+          </h1>
+        </div>
+        <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 20 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Welcome</div>
+          <div style={{ color: TOKENS.textDim, fontSize: 14, marginBottom: 16 }}>
+            Set up your own league to start tracking games, or join one a friend has already created.
+          </div>
+          <button onClick={openCreatePanel} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold mb-5" style={{ background: TOKENS.teal, color: '#0B0D10' }}>
+            <Plus size={15} /> Create a league
+          </button>
+          <div style={{ borderTop: `1px solid ${TOKENS.line}`, paddingTop: 16 }}>
+            <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 8 }}>Have a join code?</div>
+            <JoinBox joinCodeInput={joinCodeInput} setJoinCodeInput={setJoinCodeInput} joinMsg={joinMsg} onJoin={handleJoin} />
+          </div>
+          {legacyData && (
+            <div style={{ borderTop: `1px solid ${TOKENS.line}`, paddingTop: 16, marginTop: 16 }}>
+              <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 8 }}>Games from the earlier version of this app were found.</div>
+              <button onClick={importLegacy} className="px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.gold, color: '#0B0D10' }}>
+                Import as "Badminton Champions"
+              </button>
+            </div>
+          )}
+        </div>
+        {creatingLeague && draftLeague && (
+          <CreateLeaguePanel
+            draftLeague={draftLeague}
+            setDraftLeague={setDraftLeague}
+            onCancel={() => {
+              setCreatingLeague(false);
+              setDraftLeague(null);
+            }}
+            onCreate={commitCreateLeague}
+            photoInputRef={draftPhotoInputRef}
+            onPickPhoto={onPickDraftPhoto}
+          />
+        )}
+      </div>
+    );
+  }
+
   const players = league.players;
   const sessions = league.sessions;
-  const passcode = (data.settings && data.settings.passcode) || '1234';
-
   const playersById = Object.fromEntries(players.map((p) => [p.id, p.name]));
   const activeSession = sessions.find((s) => s.date === selectedDate);
   const partnerCounts = computePartnerCounts(sessions);
   const standings = computeStandings(players, sessions);
   const topDuo = computeTopDuo(players, sessions);
 
-  // ---- permissions -------------------------------------------------------
-  // Viewers may set up and score today's and any future game day, but past
-  // game days are read-only for them, and only Admin can delete anything.
+  // The person who created a league is its Admin. Everyone else who joins can
+  // run today's and future game days but cannot delete anything or edit history.
+  const isOwner = !!user && league.ownerUid === user.uid;
+  const adminMode = isOwner && !viewerMode;
   const isPastDate = selectedDate < todayISO();
-  const canEdit = adminUnlocked || !isPastDate;
-  const canDelete = adminUnlocked;
+  const canEdit = adminMode || !isPastDate;
+  const canDelete = adminMode;
 
   function canDeleteLeague(lg) {
-    if (adminUnlocked) return true;
-    if (!lg || !lg.createdAt) return false;
+    if (!lg) return false;
+    if (user && lg.ownerUid === user.uid) return true;
     return Date.now() - new Date(lg.createdAt).getTime() < 24 * 60 * 60 * 1000;
   }
 
-  // ---- data mutators -----------------------------------------------------
-  function patchLeague(leagueId, patch) {
-    setData((prev) => ({
-      ...prev,
-      leagues: prev.leagues.map((l) => (l.id === leagueId ? { ...l, ...patch } : l)),
-    }));
-  }
-
   function updateSessions(fn) {
-    setData((prev) => ({
-      ...prev,
-      leagues: prev.leagues.map((l) => (l.id === league.id ? { ...l, sessions: fn(l.sessions) } : l)),
-    }));
+    markDirty(league.id);
+    setLeagues((prev) => prev.map((l) => (l.id === league.id ? { ...l, sessions: fn(l.sessions) } : l)));
   }
 
   function updatePlayers(fn) {
-    setData((prev) => ({
-      ...prev,
-      leagues: prev.leagues.map((l) => (l.id === league.id ? { ...l, players: fn(l.players) } : l)),
-    }));
-  }
-
-  function setPasscode(next) {
-    setData((prev) => ({ ...prev, settings: { ...(prev.settings || {}), passcode: next } }));
+    markDirty(league.id);
+    setLeagues((prev) => prev.map((l) => (l.id === league.id ? { ...l, players: fn(l.players) } : l)));
   }
 
   function startSession() {
     const present = players.filter((p) => draftAttendance && draftAttendance[p.id]).map((p) => p.id);
-    const newSession = { id: uid('s'), date: selectedDate, mode: draftMode, attendance: present, rounds: [], courts: draftCourts };
-    updateSessions((prev) => [...prev, newSession]);
+    updateSessions((prev) => [...prev, { id: uid('s'), date: selectedDate, mode: draftMode, attendance: present, rounds: [], courts: draftCourts }]);
     setSelectedCourt(1);
   }
 
@@ -583,18 +950,14 @@ function BadmintonTracker() {
     if (a.length !== need || b.length !== need) return;
     const chosen = new Set([...a, ...b]);
     const resting = activeSession.attendance.filter((id) => !chosen.has(id));
-    updateSession({
-      rounds: activeSession.rounds.map((r) => (r.id === roundId ? { ...r, teamA: a, teamB: b, resting } : r)),
-    });
+    updateSession({ rounds: activeSession.rounds.map((r) => (r.id === roundId ? { ...r, teamA: a, teamB: b, resting } : r)) });
     setEditingRoundId(null);
     setEditDraft(null);
   }
 
   function swapRoundResult(roundId) {
     updateSession({
-      rounds: activeSession.rounds.map((r) =>
-        r.id === roundId ? { ...r, teamA: r.teamB, teamB: r.teamA, scoreA: r.scoreB, scoreB: r.scoreA } : r
-      ),
+      rounds: activeSession.rounds.map((r) => (r.id === roundId ? { ...r, teamA: r.teamB, teamB: r.teamA, scoreA: r.scoreB, scoreB: r.scoreA } : r)),
     });
   }
 
@@ -612,16 +975,13 @@ function BadmintonTracker() {
     updateSession({ rounds: newRounds });
   }
 
-  // Used both by Admin's delete button and to clean up an abandoned blank round.
   function removeRound(roundId) {
     updateSession({ rounds: activeSession.rounds.filter((r) => r.id !== roundId) });
   }
 
   function setScore(roundId, side, val) {
     val = val.replace(/[^0-9]/g, '').slice(0, 2);
-    updateSession({
-      rounds: activeSession.rounds.map((r) => (r.id === roundId ? { ...r, [side]: val } : r)),
-    });
+    updateSession({ rounds: activeSession.rounds.map((r) => (r.id === roundId ? { ...r, [side]: val } : r)) });
   }
 
   function deleteSession(id) {
@@ -636,9 +996,24 @@ function BadmintonTracker() {
     updatePlayers((prev) => [...prev, { id: uid('p'), name: `Player ${prev.length + 1}` }]);
   }
 
+  function addPlayerToSession() {
+    const fresh = { id: uid('p'), name: `Player ${players.length + 1}` };
+    markDirty(league.id);
+    setLeagues((prev) =>
+      prev.map((l) =>
+        l.id === league.id
+          ? {
+              ...l,
+              players: [...l.players, fresh],
+              sessions: l.sessions.map((s) => (s.id === activeSession.id ? { ...s, attendance: [...s.attendance, fresh.id] } : s)),
+            }
+          : l
+      )
+    );
+  }
+
   function removePlayer(id) {
-    const used = sessions.some((s) => s.attendance.includes(id));
-    if (used) {
+    if (sessions.some((s) => s.attendance.includes(id))) {
       alert("This player has match history, so they can't be removed — you can rename them instead.");
       return;
     }
@@ -658,71 +1033,16 @@ function BadmintonTracker() {
     }
   }
 
-  async function onPickDraftPhoto(e) {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    setPhotoError('');
-    try {
-      const dataUrl = await fileToSquareDataUrl(file);
-      setDraftLeague((d) => ({ ...d, photo: dataUrl }));
-    } catch (err) {
-      setPhotoError("That image couldn't be processed. Try a different file.");
-    }
-  }
-
-  function beginCreateLeague() {
-    setDraftLeague({
-      name: '',
-      photo: null,
-      courts: 1,
-      playerNames: ['', '', '', ''],
-    });
-    setPhotoError('');
-    setCreatingLeague(true);
-    setSettingsOpen(false);
-  }
-
-  function commitCreateLeague() {
-    const name = (draftLeague.name || '').trim();
-    if (!name) return;
-    const names = draftLeague.playerNames.map((n) => n.trim()).filter(Boolean);
-    const playerObjs = names.length ? names.map((n) => ({ id: uid('p'), name: n })) : defaultPlayers(4);
-    const lg = newLeagueObj(name, playerObjs, Math.max(1, draftLeague.courts || 1), draftLeague.photo);
-    setData((prev) => ({ ...prev, leagues: [...prev.leagues, lg] }));
-    setActiveLeagueId(lg.id);
-    setCreatingLeague(false);
-    setDraftLeague(null);
-    setTab('today');
-    setSelectedDate(todayISO());
-    setDraftAttendance(null);
-    setDraftCourts(Math.max(1, draftLeague.courts || 1));
-  }
-
-  function deleteLeague(lg) {
-    if (data.leagues.length <= 1) {
-      alert("This is the only league, so it can't be deleted. Create another one first.");
-      return;
-    }
+  async function handleDeleteLeague(lg) {
     if (!window.confirm(`Delete the league "${lg.name}" and all of its games? This can't be undone.`)) return;
-    const remaining = data.leagues.filter((l) => l.id !== lg.id);
-    setData((prev) => ({ ...prev, leagues: prev.leagues.filter((l) => l.id !== lg.id) }));
-    setActiveLeagueId(remaining[0].id);
-  }
-
-  function tryUnlock() {
-    if (passcodeInput === passcode) {
-      setAdminUnlocked(true);
-      setShowPasscodeBox(false);
-      setPasscodeInput('');
-      setPasscodeError(false);
-    } else {
-      setPasscodeError(true);
+    const remaining = leagues.filter((l) => l.id !== lg.id);
+    setLeagues(remaining);
+    setActiveLeagueId(remaining.length ? remaining[0].id : null);
+    try {
+      await backend.deleteLeague(lg);
+    } catch (e) {
+      console.error('delete failed', e);
     }
-  }
-
-  function lockAdmin() {
-    setAdminUnlocked(false);
   }
 
   const queueIds = activeSession
@@ -740,27 +1060,8 @@ function BadmintonTracker() {
   const pastSessions = [...sessions].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   return (
-    <div
-      style={{
-        color: TOKENS.text,
-        fontFamily: 'Inter, system-ui, sans-serif',
-        maxWidth: 1400,
-        margin: '0 auto',
-        padding: 20,
-      }}
-    >
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
-        .bt-display { font-family: 'Barlow Condensed', sans-serif; letter-spacing: 0.02em; }
-        .bt-mono { font-family: 'JetBrains Mono', monospace; }
-        .bt-scale-in { animation: bt-pop 300ms ease; }
-        @keyframes bt-pop { from { transform: scale(0.9); opacity: 0.4; } to { transform: scale(1); opacity: 1; } }
-        .bt-spin { animation: bt-spin 400ms ease; }
-        .bt-live-dot { animation: bt-pulse-dot 1.4s ease-in-out infinite; }
-        @keyframes bt-pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-        @keyframes bt-spin { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }
-        .bt-scorebox::-webkit-inner-spin-button, .bt-scorebox::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-      `}</style>
+    <div style={{ color: TOKENS.text, fontFamily: 'Inter, system-ui, sans-serif', maxWidth: 1400, margin: '0 auto', padding: 20 }}>
+      <style>{BASE_CSS}</style>
 
       {/* Header */}
       <div style={{ background: TOKENS.surface, borderRadius: 14, padding: '14px 18px', marginBottom: 14 }}>
@@ -777,9 +1078,6 @@ function BadmintonTracker() {
           >
             <ShuttleIcon size={32} style={{ color: TOKENS.gold, flexShrink: 0 }} />
             <div style={{ minWidth: 0 }}>
-              <div className="bt-display" style={{ fontSize: 10, fontWeight: 700, color: TOKENS.gold, letterSpacing: '0.16em', lineHeight: 1, marginBottom: 2 }}>
-                MECSR PRESENTS
-              </div>
               <h1 className="bt-display" style={{ fontSize: 'clamp(18px, 5.5vw, 28px)', fontWeight: 700, color: TOKENS.text, lineHeight: 1.15 }}>
                 BADMINTON LEAGUE <span style={{ color: TOKENS.gold }}>SCOREBOARD</span>
               </h1>
@@ -808,25 +1106,26 @@ function BadmintonTracker() {
 
       {/* League bar */}
       <div className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 16 }}>
-        <div className="flex items-center gap-2" style={{ position: 'relative' }}>
-          <LeagueAvatar photo={league.photo} size={42} />
-          <div className="flex flex-col" style={{ gap: 2 }}>
-            <button
-              onClick={() => photoInputRef.current && photoInputRef.current.click()}
-              style={{ color: TOKENS.textDim, fontSize: 11, textAlign: 'left' }}
-            >
-              {league.photo ? 'Replace photo' : 'Add photo'}
-            </button>
+        <div className="bt-photo" onClick={() => photoInputRef.current && photoInputRef.current.click()} title="Change league photo">
+          <LeagueAvatar photo={league.photo} size={46} />
+          <div className="bt-photo-overlay">
+            <span title={league.photo ? 'Replace' : 'Upload'}>📷</span>
             {league.photo && (
-              <button onClick={() => patchLeague(league.id, { photo: null })} style={{ color: TOKENS.textDim, fontSize: 11, textAlign: 'left' }}>
-                Remove
-              </button>
+              <span
+                title="Remove photo"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  patchLeague(league.id, { photo: null });
+                }}
+              >
+                ✕
+              </span>
             )}
           </div>
           <input ref={photoInputRef} type="file" accept="image/*" onChange={onPickLeaguePhoto} style={{ display: 'none' }} />
         </div>
 
-        {data.leagues.length > 1 ? (
+        {leagues.length > 1 ? (
           <select
             value={league.id}
             onChange={(e) => {
@@ -835,183 +1134,82 @@ function BadmintonTracker() {
               setTab('today');
             }}
             className="bt-display"
-            style={{
-              background: TOKENS.surfaceAlt,
-              color: TOKENS.text,
-              border: `1px solid ${TOKENS.line}`,
-              borderRadius: 10,
-              padding: '8px 12px',
-              fontSize: 18,
-              fontWeight: 700,
-            }}
+            style={{ background: TOKENS.text, color: '#0B0D10', border: `1px solid ${TOKENS.text}`, borderRadius: 10, padding: '8px 12px', fontSize: 19, fontWeight: 700 }}
           >
-            {data.leagues.map((l) => (
+            {leagues.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.name}
               </option>
             ))}
           </select>
         ) : (
-          <span className="bt-display" style={{ fontSize: 20, fontWeight: 700, color: TOKENS.text }}>
+          <span className="bt-display" style={{ background: TOKENS.text, color: '#0B0D10', borderRadius: 10, padding: '7px 14px', fontSize: 20, fontWeight: 700 }}>
             {league.name}
           </span>
         )}
 
-        <button
-          onClick={beginCreateLeague}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold"
-          style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}
-        >
+        <button onClick={openCreatePanel} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold" style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}>
           <Plus size={13} /> New League
         </button>
 
+        {league.joinCode && (
+          <button
+            onClick={() => {
+              try {
+                navigator.clipboard.writeText(league.joinCode);
+                setCopiedCode(true);
+                setTimeout(() => setCopiedCode(false), 1500);
+              } catch (e) {
+                /* clipboard unavailable */
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm"
+            style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
+            title="Share this code so teammates can join"
+          >
+            <KeyIcon size={12} />
+            <span className="bt-mono" style={{ letterSpacing: '0.08em', color: TOKENS.text }}>
+              {league.joinCode}
+            </span>
+            <span style={{ fontSize: 11 }}>{copiedCode ? 'copied' : 'copy'}</span>
+          </button>
+        )}
+
         {canDeleteLeague(league) && (
-          <button onClick={() => deleteLeague(league)} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.loss }}>
+          <button onClick={() => handleDeleteLeague(league)} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.loss }}>
             <Trash2 size={13} /> Delete league
           </button>
         )}
+
+        <span style={{ color: TOKENS.textDim, fontSize: 12 }}>{isOwner ? 'You own this league' : 'You joined this league'}</span>
       </div>
       {photoError && <div style={{ color: TOKENS.loss, fontSize: 12, marginBottom: 12 }}>{photoError}</div>}
 
-      {creatingLeague ? (
-        <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 18, maxWidth: 620 }}>
-          <div className="flex items-center justify-between mb-4">
-            <span className="bt-display" style={{ fontSize: 20, fontWeight: 700 }}>
-              NEW LEAGUE
-            </span>
-            <button
-              onClick={() => {
-                setCreatingLeague(false);
-                setDraftLeague(null);
-              }}
-              className="p-2 -m-2"
-              style={{ color: TOKENS.textDim }}
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>League name</div>
-            <input
-              autoFocus
-              value={draftLeague.name}
-              onChange={(e) => setDraftLeague({ ...draftLeague, name: e.target.value })}
-              placeholder="e.g. Friday Night Smash"
-              style={{ width: '100%', background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '8px 10px', color: TOKENS.text }}
-            />
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>League photo (optional)</div>
-            <div className="flex items-center gap-3">
-              <LeagueAvatar photo={draftLeague.photo} size={54} />
-              <button
-                onClick={() => draftPhotoInputRef.current && draftPhotoInputRef.current.click()}
-                className="px-3 py-1.5 rounded-lg text-sm"
-                style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
-              >
-                {draftLeague.photo ? 'Replace' : 'Upload'}
-              </button>
-              {draftLeague.photo && (
-                <button onClick={() => setDraftLeague({ ...draftLeague, photo: null })} className="text-sm" style={{ color: TOKENS.textDim }}>
-                  Remove
-                </button>
-              )}
-              <input ref={draftPhotoInputRef} type="file" accept="image/*" onChange={onPickDraftPhoto} style={{ display: 'none' }} />
-            </div>
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>Number of courts</div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setDraftLeague({ ...draftLeague, courts: Math.max(1, (draftLeague.courts || 1) - 1) })}
-                className="px-2.5 py-1 rounded-lg font-semibold"
-                style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
-              >
-                −
-              </button>
-              <span className="bt-mono" style={{ fontWeight: 700, minWidth: 20, textAlign: 'center' }}>
-                {draftLeague.courts || 1}
-              </span>
-              <button
-                onClick={() => setDraftLeague({ ...draftLeague, courts: (draftLeague.courts || 1) + 1 })}
-                className="px-2.5 py-1 rounded-lg font-semibold"
-                style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>Players</div>
-            <div className="grid gap-2">
-              {draftLeague.playerNames.map((n, idx) => (
-                <div key={idx} className="flex items-center gap-2">
-                  <input
-                    value={n}
-                    onChange={(e) => {
-                      const next = [...draftLeague.playerNames];
-                      next[idx] = e.target.value;
-                      setDraftLeague({ ...draftLeague, playerNames: next });
-                    }}
-                    placeholder={`Player ${idx + 1}`}
-                    style={{ flex: 1, background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text }}
-                  />
-                  {draftLeague.playerNames.length > 1 && (
-                    <button
-                      onClick={() =>
-                        setDraftLeague({ ...draftLeague, playerNames: draftLeague.playerNames.filter((_, i) => i !== idx) })
-                      }
-                      className="p-2 -m-2"
-                      style={{ color: TOKENS.textDim }}
-                    >
-                      <X size={15} />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={() => setDraftLeague({ ...draftLeague, playerNames: [...draftLeague.playerNames, ''] })}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold mt-2"
-              style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}
-            >
-              <Plus size={13} /> Add player
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={commitCreateLeague}
-              disabled={!(draftLeague.name || '').trim()}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold"
-              style={{ background: TOKENS.teal, color: '#0B0D10', opacity: (draftLeague.name || '').trim() ? 1 : 0.5 }}
-            >
-              <Check size={14} /> Create league
-            </button>
-            <button
-              onClick={() => {
-                setCreatingLeague(false);
-                setDraftLeague(null);
-              }}
-              className="px-4 py-2 rounded-lg"
-              style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
-            >
-              Cancel
-            </button>
-          </div>
-          <div style={{ color: TOKENS.textDim, fontSize: 12, marginTop: 12 }}>
-            A league you create can be deleted by anyone within 24 hours of creation. After that, only an Admin can remove it.
-          </div>
-        </div>
+      {creatingLeague && draftLeague ? (
+        <CreateLeaguePanel
+          draftLeague={draftLeague}
+          setDraftLeague={setDraftLeague}
+          onCancel={() => {
+            setCreatingLeague(false);
+            setDraftLeague(null);
+          }}
+          onCreate={commitCreateLeague}
+          photoInputRef={draftPhotoInputRef}
+          onPickPhoto={onPickDraftPhoto}
+        />
       ) : settingsOpen ? (
         <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 16, marginBottom: 20, maxWidth: 620 }}>
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <div className="flex gap-2">
-              <Chip active={settingsTab === 'admin'} onClick={() => setSettingsTab('admin')}>
+            <div className="flex gap-2 flex-wrap">
+              {backend.supportsAccounts && (
+                <Chip active={settingsTab === 'account'} onClick={() => setSettingsTab('account')}>
+                  Account
+                </Chip>
+              )}
+              <Chip active={settingsTab === 'join'} onClick={() => setSettingsTab('join')}>
+                Join League
+              </Chip>
+              <Chip active={settingsTab === 'role'} onClick={() => setSettingsTab('role')}>
                 Change Role
               </Chip>
               <Chip active={settingsTab === 'roster'} onClick={() => setSettingsTab('roster')}>
@@ -1023,104 +1221,141 @@ function BadmintonTracker() {
             </button>
           </div>
 
-          {settingsTab === 'admin' && (
+          {settingsTab === 'account' && backend.supportsAccounts && (
             <div>
-              <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <Chip
-                  active={!adminUnlocked}
-                  onClick={() => {
-                    if (adminUnlocked) lockAdmin();
-                  }}
-                >
-                  Viewer
-                </Chip>
-                <Chip
-                  active={adminUnlocked}
-                  color={TOKENS.win}
-                  onClick={() => {
-                    if (!adminUnlocked) setShowPasscodeBox(true);
-                  }}
-                >
-                  Admin
-                </Chip>
+              <div style={{ marginBottom: 12 }}>
+                <span style={{ color: TOKENS.textDim, fontSize: 13 }}>Signed in as: </span>
+                <span style={{ fontWeight: 600 }}>{user && !user.isAnonymous ? user.email || user.displayName : 'Guest'}</span>
               </div>
-
-              <div style={{ color: TOKENS.textDim, fontSize: 12, marginBottom: 12 }}>
-                Viewers can set up and score today's and future game days. Editing past game days and deleting anything needs Admin.
-              </div>
-
-              {!adminUnlocked && showPasscodeBox && (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <input
-                    type="password"
-                    autoFocus
-                    value={passcodeInput}
-                    onChange={(e) => {
-                      setPasscodeInput(e.target.value);
-                      setPasscodeError(false);
-                    }}
-                    onKeyDown={(e) => e.key === 'Enter' && tryUnlock()}
-                    placeholder="Passcode"
-                    style={{
-                      width: 140,
-                      background: TOKENS.surfaceAlt,
-                      color: TOKENS.text,
-                      border: `1px solid ${passcodeError ? TOKENS.loss : TOKENS.line}`,
-                      borderRadius: 8,
-                      padding: '6px 10px',
-                    }}
-                  />
-                  <button onClick={tryUnlock} className="px-3 py-1.5 rounded-lg" style={{ background: TOKENS.teal, color: '#0B0D10' }}>
-                    <Check size={14} />
-                  </button>
+              {user && user.isAnonymous ? (
+                <div>
+                  <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 12 }}>
+                    You're playing as a guest. Adding an account keeps your leagues if you switch device or clear your browser.
+                  </div>
                   <button
-                    onClick={() => {
-                      setShowPasscodeBox(false);
-                      setPasscodeInput('');
-                      setPasscodeError(false);
+                    onClick={async () => {
+                      setAuthMsg('');
+                      setAuthBusy(true);
+                      try {
+                        await backend.signInGoogle();
+                      } catch (e) {
+                        setAuthMsg(e.message || 'Google sign-in failed.');
+                      }
+                      setAuthBusy(false);
                     }}
-                    className="px-3 py-1.5 rounded-lg"
-                    style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
+                    disabled={authBusy}
+                    className="px-4 py-2 rounded-lg font-semibold mb-4"
+                    style={{ background: TOKENS.text, color: '#0B0D10' }}
                   >
-                    <X size={14} />
+                    Continue with Google
+                  </button>
+                  <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>Or use email and password</div>
+                  <div className="flex items-center gap-2 flex-wrap mb-2">
+                    <input
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '7px 10px', color: TOKENS.text, minWidth: 200 }}
+                    />
+                    <input
+                      type="password"
+                      value={authPw}
+                      onChange={(e) => setAuthPw(e.target.value)}
+                      placeholder="Password (6+ chars)"
+                      style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '7px 10px', color: TOKENS.text, minWidth: 180 }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={async () => {
+                        setAuthMsg('');
+                        setAuthBusy(true);
+                        try {
+                          await backend.signUpEmail(authEmail.trim(), authPw);
+                          setAuthPw('');
+                        } catch (e) {
+                          setAuthMsg(e.message || 'Could not create account.');
+                        }
+                        setAuthBusy(false);
+                      }}
+                      disabled={authBusy}
+                      className="px-4 py-2 rounded-lg font-semibold"
+                      style={{ background: TOKENS.teal, color: '#0B0D10' }}
+                    >
+                      Create account
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setAuthMsg('');
+                        setAuthBusy(true);
+                        try {
+                          await backend.signInEmail(authEmail.trim(), authPw);
+                          setAuthPw('');
+                        } catch (e) {
+                          setAuthMsg(e.message || 'Could not sign in.');
+                        }
+                        setAuthBusy(false);
+                      }}
+                      disabled={authBusy}
+                      className="px-4 py-2 rounded-lg"
+                      style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
+                    >
+                      Sign in
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => backend.signOut()} className="px-4 py-2 rounded-lg" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
+                  Sign out
+                </button>
+              )}
+              {authMsg && <div style={{ color: TOKENS.loss, fontSize: 13, marginTop: 10 }}>{authMsg}</div>}
+
+              {legacyData && (
+                <div style={{ borderTop: `1px solid ${TOKENS.line}`, paddingTop: 14, marginTop: 16 }}>
+                  <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 8 }}>Games from the earlier version of this app were found.</div>
+                  <button onClick={importLegacy} className="px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.gold, color: '#0B0D10' }}>
+                    Import as "Badminton Champions"
                   </button>
                 </div>
               )}
+            </div>
+          )}
 
-              {adminUnlocked && (
-                <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${TOKENS.line}` }}>
-                  <div className="flex items-center gap-2 mb-2" style={{ color: TOKENS.gold, fontWeight: 700 }}>
-                    <Lock size={15} /> Admin passcode
+          {settingsTab === 'join' && (
+            <div>
+              <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 10 }}>Enter a league's join code to add it to your list.</div>
+              <JoinBox joinCodeInput={joinCodeInput} setJoinCodeInput={setJoinCodeInput} joinMsg={joinMsg} onJoin={handleJoin} />
+              <div style={{ borderTop: `1px solid ${TOKENS.line}`, paddingTop: 14, marginTop: 16 }}>
+                <div style={{ color: TOKENS.textDim, fontSize: 13, marginBottom: 6 }}>This league's code</div>
+                <span className="bt-mono" style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 12px', fontSize: 16, letterSpacing: '0.12em' }}>
+                  {league.joinCode || '—'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {settingsTab === 'role' && (
+            <div>
+              {isOwner ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-3 flex-wrap">
+                    <Chip active={viewerMode} onClick={() => setViewerMode(true)}>
+                      Viewer
+                    </Chip>
+                    <Chip active={!viewerMode} color={TOKENS.win} onClick={() => setViewerMode(false)}>
+                      Admin
+                    </Chip>
                   </div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span style={{ color: TOKENS.textDim, fontSize: 13 }}>Current:</span>
-                    <span className="bt-mono" style={{ color: TOKENS.text, fontWeight: 700 }}>
-                      {showPasscodeText ? passcode : '••••'}
-                    </span>
-                    <button onClick={() => setShowPasscodeText((v) => !v)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
-                      {showPasscodeText ? <EyeOff size={15} /> : <Eye size={15} />}
-                    </button>
+                  <div style={{ color: TOKENS.textDim, fontSize: 12 }}>
+                    You created this league, so you're its Admin. Switching to Viewer limits you to what your teammates can do — handy
+                    if you want to avoid changing history by accident.
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      value={newPasscodeInput}
-                      onChange={(e) => setNewPasscodeInput(e.target.value)}
-                      placeholder="New passcode"
-                      style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text }}
-                    />
-                    <button
-                      onClick={() => {
-                        if (newPasscodeInput.trim()) {
-                          setPasscode(newPasscodeInput.trim());
-                          setNewPasscodeInput('');
-                        }
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-sm font-semibold"
-                      style={{ background: TOKENS.teal, color: '#0B0D10' }}
-                    >
-                      Update
-                    </button>
-                  </div>
+                </div>
+              ) : (
+                <div style={{ color: TOKENS.textDim, fontSize: 13 }}>
+                  You're a member of this league. You can run today's and future game days — starting sessions, adding games and courts,
+                  adding players, and entering scores. Editing past game days and deleting anything is limited to whoever created it.
                 </div>
               )}
             </div>
@@ -1128,13 +1363,10 @@ function BadmintonTracker() {
 
           {settingsTab === 'roster' && (
             <div className="grid gap-2">
+              <div style={{ color: TOKENS.textDim, fontSize: 12, marginBottom: 4 }}>Player names are edited on the Live Game tab during a session.</div>
               {players.map((p) => (
-                <div key={p.id} className="flex items-center gap-2">
-                  <input
-                    value={p.name}
-                    onChange={(e) => renamePlayer(p.id, e.target.value)}
-                    style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text, flex: 1 }}
-                  />
+                <div key={p.id} className="flex items-center justify-between gap-2" style={{ padding: '6px 10px', background: TOKENS.surfaceAlt, borderRadius: 8 }}>
+                  <span style={{ color: TOKENS.text }}>{p.name}</span>
                   {canDelete && (
                     <button onClick={() => removePlayer(p.id)} className="p-2 -m-2" style={{ color: TOKENS.textDim }}>
                       <X size={16} />
@@ -1142,16 +1374,9 @@ function BadmintonTracker() {
                   )}
                 </div>
               ))}
-              <button
-                onClick={addPlayer}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold mt-2 w-fit"
-                style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}
-              >
+              <button onClick={addPlayer} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold mt-2 w-fit" style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}>
                 <Plus size={16} /> Add player
               </button>
-              {!canDelete && (
-                <div style={{ color: TOKENS.textDim, fontSize: 12 }}>Removing a player requires Admin.</div>
-              )}
             </div>
           )}
         </div>
@@ -1173,6 +1398,7 @@ function BadmintonTracker() {
             <div>
               <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <CalendarDays size={18} style={{ color: TOKENS.textDim }} />
+                <span style={{ color: TOKENS.textDim, fontSize: 14 }}>Select Date</span>
                 <input
                   type="date"
                   value={selectedDate}
@@ -1183,9 +1409,6 @@ function BadmintonTracker() {
                   style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px' }}
                 />
                 <span style={{ color: TOKENS.textDim, fontSize: 14 }}>{fmtDate(selectedDate)}</span>
-                {isPastDate && !adminUnlocked && (
-                  <span style={{ color: TOKENS.textDim, fontSize: 12 }}>· past game day (read-only)</span>
-                )}
               </div>
 
               {!activeSession ? (
@@ -1217,21 +1440,13 @@ function BadmintonTracker() {
                     </div>
                     <div className="flex items-center gap-3 mb-4">
                       <span style={{ color: TOKENS.textDim, fontSize: 14 }}>Number of courts:</span>
-                      <button
-                        onClick={() => setDraftCourts((c) => Math.max(1, c - 1))}
-                        className="px-2.5 py-1 rounded-lg font-semibold"
-                        style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
-                      >
+                      <button onClick={() => setDraftCourts((c) => Math.max(1, c - 1))} className="px-2.5 py-1 rounded-lg font-semibold" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
                         −
                       </button>
                       <span className="bt-mono" style={{ fontWeight: 700, minWidth: 20, textAlign: 'center' }}>
                         {draftCourts}
                       </span>
-                      <button
-                        onClick={() => setDraftCourts((c) => c + 1)}
-                        className="px-2.5 py-1 rounded-lg font-semibold"
-                        style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
-                      >
+                      <button onClick={() => setDraftCourts((c) => c + 1)} className="px-2.5 py-1 rounded-lg font-semibold" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
                         +
                       </button>
                     </div>
@@ -1246,7 +1461,7 @@ function BadmintonTracker() {
                   </div>
                 ) : (
                   <div style={{ background: TOKENS.surface, borderRadius: 12, padding: 18, border: `1px solid ${TOKENS.line}`, color: TOKENS.textDim, maxWidth: 620 }}>
-                    No session was logged for {fmtDate(selectedDate)}. Past game days can only be set up by an Admin.
+                    No session was logged for {fmtDate(selectedDate)}. Past game days can only be set up by whoever created the league.
                   </div>
                 )
               ) : (
@@ -1271,14 +1486,7 @@ function BadmintonTracker() {
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
-                      gap: 14,
-                      marginBottom: 16,
-                    }}
-                  >
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14, marginBottom: 16 }}>
                     {activeSession.rounds.map((r, i) => {
                       const a = Number(r.scoreA),
                         b = Number(r.scoreB);
@@ -1295,17 +1503,11 @@ function BadmintonTracker() {
                             </div>
                             <div className="flex items-center gap-2">
                               {decided ? (
-                                <span
-                                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display"
-                                  style={{ background: TOKENS.surface, color: TOKENS.textDim, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', border: `1px solid ${TOKENS.line}` }}
-                                >
+                                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display" style={{ background: TOKENS.surface, color: TOKENS.textDim, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', border: `1px solid ${TOKENS.line}` }}>
                                   FINAL
                                 </span>
                               ) : (
-                                <span
-                                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display"
-                                  style={{ background: '#E2585B22', color: TOKENS.loss, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em' }}
-                                >
+                                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bt-display" style={{ background: '#E2585B22', color: TOKENS.loss, fontSize: 11, fontWeight: 700, letterSpacing: '0.05em' }}>
                                   <span className="bt-live-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: TOKENS.loss, display: 'inline-block' }} />
                                   LIVE
                                 </span>
@@ -1384,18 +1586,10 @@ function BadmintonTracker() {
                                   </div>
                                 </div>
                                 <div className="flex gap-2">
-                                  <button
-                                    onClick={() => saveEditTeams(r.id)}
-                                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-semibold"
-                                    style={{ background: TOKENS.teal, color: '#0B0D10' }}
-                                  >
+                                  <button onClick={() => saveEditTeams(r.id)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ background: TOKENS.teal, color: '#0B0D10' }}>
                                     <Check size={14} /> Save
                                   </button>
-                                  <button
-                                    onClick={() => cancelEditTeams(r)}
-                                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm"
-                                    style={{ background: TOKENS.surface, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
-                                  >
+                                  <button onClick={() => cancelEditTeams(r)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm" style={{ background: TOKENS.surface, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}>
                                     <X size={14} /> Cancel
                                   </button>
                                 </div>
@@ -1409,21 +1603,7 @@ function BadmintonTracker() {
                                     </div>
                                     <div style={{ position: 'relative', padding: '12px 10px', textAlign: 'center' }}>
                                       {decided && aWins && (
-                                        <span
-                                          style={{
-                                            position: 'absolute',
-                                            inset: 0,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontSize: 56,
-                                            opacity: 0.14,
-                                            lineHeight: 1,
-                                            pointerEvents: 'none',
-                                          }}
-                                        >
-                                          🏆
-                                        </span>
+                                        <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 56, opacity: 0.14, lineHeight: 1, pointerEvents: 'none' }}>🏆</span>
                                       )}
                                       {r.teamA.map((id) => (
                                         <div key={id} style={{ position: 'relative', fontWeight: 600, color: decided ? (aWins ? TOKENS.win : TOKENS.text) : TOKENS.text, marginBottom: 2 }}>
@@ -1443,21 +1623,7 @@ function BadmintonTracker() {
                                     </div>
                                     <div style={{ position: 'relative', padding: '12px 10px', textAlign: 'center' }}>
                                       {decided && !aWins && (
-                                        <span
-                                          style={{
-                                            position: 'absolute',
-                                            inset: 0,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontSize: 56,
-                                            opacity: 0.14,
-                                            lineHeight: 1,
-                                            pointerEvents: 'none',
-                                          }}
-                                        >
-                                          🏆
-                                        </span>
+                                        <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 56, opacity: 0.14, lineHeight: 1, pointerEvents: 'none' }}>🏆</span>
                                       )}
                                       {r.teamB.map((id) => (
                                         <div key={id} style={{ position: 'relative', fontWeight: 600, color: decided ? (!aWins ? TOKENS.win : TOKENS.text) : TOKENS.text, marginBottom: 2 }}>
@@ -1477,20 +1643,7 @@ function BadmintonTracker() {
                                     onChange={(e) => setScore(r.id, 'scoreA', e.target.value)}
                                     readOnly={!canEdit}
                                     placeholder="0"
-                                    style={{
-                                      flex: 1,
-                                      minWidth: 0,
-                                      width: '100%',
-                                      textAlign: 'center',
-                                      fontSize: 22,
-                                      fontWeight: 700,
-                                      background: '#2FA8A02E',
-                                      border: `1px solid ${TOKENS.tealDim}`,
-                                      borderRadius: 10,
-                                      color: TOKENS.text,
-                                      padding: '10px 0',
-                                      cursor: canEdit ? 'text' : 'default',
-                                    }}
+                                    style={{ flex: 1, minWidth: 0, width: '100%', textAlign: 'center', fontSize: 22, fontWeight: 700, background: '#2FA8A02E', border: `1px solid ${TOKENS.tealDim}`, borderRadius: 10, color: TOKENS.text, padding: '10px 0', cursor: canEdit ? 'text' : 'default' }}
                                   />
                                   <div style={{ minWidth: 24 }} />
                                   <input
@@ -1501,20 +1654,7 @@ function BadmintonTracker() {
                                     onChange={(e) => setScore(r.id, 'scoreB', e.target.value)}
                                     readOnly={!canEdit}
                                     placeholder="0"
-                                    style={{
-                                      flex: 1,
-                                      minWidth: 0,
-                                      width: '100%',
-                                      textAlign: 'center',
-                                      fontSize: 22,
-                                      fontWeight: 700,
-                                      background: '#F4B9422E',
-                                      border: `1px solid ${TOKENS.gold}`,
-                                      borderRadius: 10,
-                                      color: TOKENS.text,
-                                      padding: '10px 0',
-                                      cursor: canEdit ? 'text' : 'default',
-                                    }}
+                                    style={{ flex: 1, minWidth: 0, width: '100%', textAlign: 'center', fontSize: 22, fontWeight: 700, background: '#F4B9422E', border: `1px solid ${TOKENS.gold}`, borderRadius: 10, color: TOKENS.text, padding: '10px 0', cursor: canEdit ? 'text' : 'default' }}
                                   />
                                 </div>
                               </div>
@@ -1530,20 +1670,40 @@ function BadmintonTracker() {
                       <div className="flex items-center gap-2 mb-2">
                         <Users size={15} style={{ color: TOKENS.textDim }} />
                         <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
-                          {adminUnlocked ? 'QUEUE' : 'PLAYERS PRESENT'} ({queueIds.length})
+                          {adminMode ? 'QUEUE' : 'PLAYERS PRESENT'} ({queueIds.length})
                         </span>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {queueIds.map((id, qi) => (
-                          <span
-                            key={id}
-                            className="bt-mono"
-                            style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, borderRadius: 999, padding: '4px 10px', fontSize: 13, border: `1px solid ${TOKENS.line}` }}
-                          >
+                          <span key={id} className="bt-mono" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, borderRadius: 999, padding: '4px 10px', fontSize: 13, border: `1px solid ${TOKENS.line}` }}>
                             {qi + 1}. {playersById[id]}
                           </span>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {canEdit && (
+                    <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14, marginBottom: 16, maxWidth: 620 }}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <Pencil size={14} style={{ color: TOKENS.textDim }} />
+                        <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
+                          PLAYER NAMES
+                        </span>
+                      </div>
+                      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+                        {activeSession.attendance.map((id) => (
+                          <input
+                            key={id}
+                            value={playersById[id] || ''}
+                            onChange={(e) => renamePlayer(id, e.target.value)}
+                            style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, borderRadius: 8, padding: '6px 10px', color: TOKENS.text, width: '100%' }}
+                          />
+                        ))}
+                      </div>
+                      <button onClick={addPlayerToSession} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold mt-3" style={{ background: TOKENS.surfaceAlt, border: `1px solid ${TOKENS.line}`, color: TOKENS.text }}>
+                        <Plus size={13} /> Add player
+                      </button>
                     </div>
                   )}
 
@@ -1560,18 +1720,10 @@ function BadmintonTracker() {
 
                   {canEdit && (
                     <div className="flex gap-2 flex-wrap">
-                      <button
-                        onClick={addRound}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold"
-                        style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}
-                      >
+                      <button onClick={addRound} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}>
                         <Shuffle size={16} /> Shuffle next game
                       </button>
-                      <button
-                        onClick={addManualRound}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold"
-                        style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}
-                      >
+                      <button onClick={addManualRound} className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold" style={{ background: TOKENS.surfaceAlt, color: TOKENS.text, border: `1px solid ${TOKENS.line}` }}>
                         <Pencil size={16} /> Pick players manually
                       </button>
                     </div>
@@ -1659,11 +1811,7 @@ function BadmintonTracker() {
                 const open = !!historyOpen[s.id];
                 return (
                   <div key={s.id} style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14 }}>
-                    <button
-                      onClick={() => setHistoryOpen((prev) => ({ ...prev, [s.id]: !prev[s.id] }))}
-                      className="flex items-center justify-between w-full"
-                      style={{ color: TOKENS.text }}
-                    >
+                    <button onClick={() => setHistoryOpen((prev) => ({ ...prev, [s.id]: !prev[s.id] }))} className="flex items-center justify-between w-full" style={{ color: TOKENS.text }}>
                       <span style={{ fontWeight: 600 }}>
                         {fmtDate(s.date)} · {titleMode(s.mode)} · {s.rounds.length} games
                       </span>
@@ -1717,9 +1865,9 @@ function BadmintonTracker() {
 ReactDOM.createRoot(document.getElementById('root')).render(<BadmintonTracker />);
 </script>
 <script>
-  // Compile the app source with Babel's CLASSIC JSX runtime (React.createElement).
-  // The default "automatic" runtime emits an ES `import` for react/jsx-runtime,
-  // which throws "Cannot use import statement outside a module" in a plain script.
+  // Compile with Babel's CLASSIC JSX runtime (React.createElement). The default
+  // "automatic" runtime emits an ES import for react/jsx-runtime, which throws
+  // "Cannot use import statement outside a module" in a plain script.
   var appSource = document.getElementById('app-source').textContent;
   var compiled = Babel.transform(appSource, { presets: [['react', { runtime: 'classic' }]] }).code;
   var s = document.createElement('script');
