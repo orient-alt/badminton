@@ -1,0 +1,15 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor settings
+.vscode/
+.idea/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Firebase CLI local files
+.firebase/
+firebase-debug.log

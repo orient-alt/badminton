@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Badminton League Scoreboard</title>
+<meta name="description" content="Live badminton league scoreboard: fair team shuffles, court tracking, standings and history." />
+<meta name="theme-color" content="#12151A" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Badminton" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,7 +21,13 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
+  html { color-scheme: dark; }
   html, body { background: #12151A; margin: 0; padding: 0; min-height: 100%; }
+  body { -webkit-tap-highlight-color: transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #12151A; }
+  ::-webkit-scrollbar-thumb { background: #2B3140; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3A4254; }
 </style>
 </head>
 <body>
@@ -193,6 +208,9 @@ const backend = {
   },
 };
 
+// The home league every new visitor is dropped into automatically.
+const DEFAULT_JOIN_CODE = 'BACGYM';
+
 const TOKENS = {
   bg: '#12151A',
   surface: '#1B2028',
@@ -230,6 +248,13 @@ const BASE_CSS = `
   .bt-chip-edit-icon { opacity: 0; transition: opacity 120ms ease; background: none; border: none; cursor: pointer; padding: 2px; }
   .bt-chip-editable:hover .bt-chip-edit-icon, .bt-chip-editable:focus-within .bt-chip-edit-icon { opacity: 1; }
   @media (hover: none) { .bt-chip-edit-icon { opacity: 0.7; } }
+  button { transition: transform 120ms ease, filter 120ms ease, background 150ms ease, opacity 150ms ease; }
+  button:not(:disabled):hover { filter: brightness(1.12); }
+  button:not(:disabled):active { transform: scale(0.96); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #F4B942; outline-offset: 2px; }
+  input, select { transition: border-color 150ms ease; }
+  input:focus, select:focus { border-color: #2FA8A0 !important; }
+  .bt-scale-in { box-shadow: 0 3px 14px rgba(0,0,0,0.28); }
 `;
 
 function makeIcon(glyph) {
@@ -685,6 +710,7 @@ function BadmintonTracker() {
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [joinMsg, setJoinMsg] = useState('');
   const [joinBoxOpen, setJoinBoxOpen] = useState(false);
+  const [autoJoining, setAutoJoining] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
   const [authPw, setAuthPw] = useState('');
   const [authMsg, setAuthMsg] = useState('');
@@ -694,6 +720,7 @@ function BadmintonTracker() {
 
   const saveTimer = useRef(null);
   const dirtyRef = useRef(new Set());
+  const autoJoinFor = useRef(null);
   const photoInputRef = useRef(null);
   const draftPhotoInputRef = useRef(null);
 
@@ -741,11 +768,36 @@ function BadmintonTracker() {
     }, 500);
   }, [leagues]);
 
+  // Every account - including brand-new guests - is automatically joined into
+  // the home league (BACGYM) the first time it shows up with no leagues, so
+  // opening the link always lands on Badminton Champions.
+  useEffect(() => {
+    if (!user || !leagues || leagues.length > 0) return;
+    if (autoJoinFor.current === user.uid) return;
+    autoJoinFor.current = user.uid;
+    setAutoJoining(true);
+    // Safety valve: never leave the app stuck on Loading if the snapshot
+    // confirming membership takes too long or the join silently fails.
+    const bail = setTimeout(() => setAutoJoining(false), 8000);
+    Promise.resolve(backend.joinByCode(DEFAULT_JOIN_CODE, user.uid))
+      .then((res) => {
+        if (!res.ok) {
+          clearTimeout(bail);
+          setAutoJoining(false);
+        }
+      })
+      .catch(() => {
+        clearTimeout(bail);
+        setAutoJoining(false);
+      });
+  }, [user, leagues]);
+
   useEffect(() => {
     if (!leagues || !leagues.length) return;
+    setAutoJoining(false);
     setActiveLeagueId((prev) => {
       if (prev && leagues.some((l) => l.id === prev)) return prev;
-      const champions = leagues.find((l) => l.joinCode === 'BACGYM') || leagues.find((l) => l.name === 'Badminton Champions');
+      const champions = leagues.find((l) => l.joinCode === DEFAULT_JOIN_CODE) || leagues.find((l) => l.name === 'Badminton Champions');
       return (champions || leagues[0]).id;
     });
   }, [leagues]);
@@ -833,7 +885,7 @@ function BadmintonTracker() {
     setTab('today');
   }
 
-  if (!authReady || !leagues) {
+  if (!authReady || !leagues || (autoJoining && !leagues.length)) {
     return (
       <div style={{ background: TOKENS.bg, color: TOKENS.textDim, minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Inter, sans-serif' }}>
         <style>{BASE_CSS}</style>
@@ -1179,11 +1231,11 @@ function BadmintonTracker() {
   const pastSessions = [...sessions].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   return (
-    <div style={{ color: TOKENS.text, fontFamily: 'Inter, system-ui, sans-serif', maxWidth: 1400, margin: '0 auto', padding: 20 }}>
+    <div style={{ color: TOKENS.text, fontFamily: 'Inter, system-ui, sans-serif', maxWidth: 1400, margin: '0 auto', padding: 'clamp(10px, 3vw, 20px)' }}>
       <style>{BASE_CSS}</style>
 
       {/* Header */}
-      <div style={{ background: TOKENS.surface, borderRadius: 14, padding: '14px 18px', marginBottom: 14 }}>
+      <div style={{ background: `linear-gradient(135deg, ${TOKENS.surface} 0%, ${TOKENS.surfaceAlt} 100%)`, borderRadius: 14, padding: 'clamp(10px, 2.5vw, 16px) clamp(12px, 3vw, 18px)', marginBottom: 14, borderBottom: `2px solid ${TOKENS.gold}`, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}>
         <div className="flex items-start justify-between gap-3">
           <div
             className="flex items-center gap-2"
@@ -1642,7 +1694,7 @@ function BadmintonTracker() {
                     )}
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14, marginBottom: 16 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 340px), 1fr))', gap: 14, marginBottom: 16 }}>
                     {activeSession.rounds.map((r, i) => {
                       const a = Number(r.scoreA),
                         b = Number(r.scoreB);
@@ -2138,6 +2190,16 @@ ReactDOM.createRoot(document.getElementById('root')).render(<BadmintonTracker />
   var s = document.createElement('script');
   s.text = compiled;
   document.body.appendChild(s);
+
+  // Installable app: register the service worker (skipped when opened as a
+  // plain file, where service workers aren't allowed).
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (e) {
+        console.warn('Service worker registration failed', e);
+      });
+    });
+  }
 </script>
 </body>
 </html>
