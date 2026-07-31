@@ -684,6 +684,7 @@ function BadmintonTracker() {
   const [photoError, setPhotoError] = useState('');
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [joinMsg, setJoinMsg] = useState('');
+  const [joinBoxOpen, setJoinBoxOpen] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
   const [authPw, setAuthPw] = useState('');
   const [authMsg, setAuthMsg] = useState('');
@@ -744,7 +745,7 @@ function BadmintonTracker() {
     if (!leagues || !leagues.length) return;
     setActiveLeagueId((prev) => {
       if (prev && leagues.some((l) => l.id === prev)) return prev;
-      const champions = leagues.find((l) => l.name === 'Badminton Champions');
+      const champions = leagues.find((l) => l.joinCode === 'BACGYM') || leagues.find((l) => l.name === 'Badminton Champions');
       return (champions || leagues[0]).id;
     });
   }, [leagues]);
@@ -803,6 +804,11 @@ function BadmintonTracker() {
       if (res.ok) {
         setJoinCodeInput('');
         setJoinMsg('Joined.');
+        setActiveLeagueId(res.leagueId);
+        setDraftAttendance(null);
+        setNextDraft(null);
+        setTab('today');
+        setJoinBoxOpen(false);
       } else {
         setJoinMsg(res.error);
       }
@@ -1267,32 +1273,48 @@ function BadmintonTracker() {
           )}
         </div>
 
+        {league.joinCode && (
+          <div className="flex flex-col" style={{ gap: 3 }}>
+            <span className="bt-display" style={{ fontSize: 10, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.1em', paddingLeft: 2 }}>
+              LEAGUE CODE
+            </span>
+            <button
+              onClick={() => {
+                try {
+                  navigator.clipboard.writeText(league.joinCode);
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 1500);
+                } catch (e) {
+                  /* clipboard unavailable */
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm"
+              style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
+              title="Share this code so teammates can join"
+            >
+              <KeyIcon size={12} />
+              <span className="bt-mono" style={{ letterSpacing: '0.08em', color: TOKENS.text }}>
+                {league.joinCode}
+              </span>
+              <span style={{ fontSize: 11 }}>{copiedCode ? 'copied' : 'copy'}</span>
+            </button>
+          </div>
+        )}
+
         <button onClick={openCreatePanel} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold" style={{ background: TOKENS.tealDim, color: TOKENS.text, border: `1px solid ${TOKENS.teal}` }}>
           <Plus size={13} /> New League
         </button>
 
-        {league.joinCode && (
-          <button
-            onClick={() => {
-              try {
-                navigator.clipboard.writeText(league.joinCode);
-                setCopiedCode(true);
-                setTimeout(() => setCopiedCode(false), 1500);
-              } catch (e) {
-                /* clipboard unavailable */
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm"
-            style={{ background: TOKENS.surfaceAlt, color: TOKENS.textDim, border: `1px solid ${TOKENS.line}` }}
-            title="Share this code so teammates can join"
-          >
-            <KeyIcon size={12} />
-            <span className="bt-mono" style={{ letterSpacing: '0.08em', color: TOKENS.text }}>
-              {league.joinCode}
-            </span>
-            <span style={{ fontSize: 11 }}>{copiedCode ? 'copied' : 'copy'}</span>
-          </button>
-        )}
+        <button
+          onClick={() => {
+            setJoinMsg('');
+            setJoinBoxOpen((v) => !v);
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold"
+          style={{ background: joinBoxOpen ? TOKENS.gold : TOKENS.surfaceAlt, color: joinBoxOpen ? '#0B0D10' : TOKENS.text, border: `1px solid ${joinBoxOpen ? TOKENS.gold : TOKENS.line}` }}
+        >
+          <KeyIcon size={13} /> Join Other League
+        </button>
 
         {canDeleteLeague(league) && (
           <button onClick={() => handleDeleteLeague(league)} className="flex items-center gap-1 text-sm" style={{ color: TOKENS.loss }}>
@@ -1302,6 +1324,20 @@ function BadmintonTracker() {
 
         <span style={{ color: TOKENS.textDim, fontSize: 12 }}>{isOwner ? 'You own this league' : 'You joined this league'}</span>
       </div>
+
+      {joinBoxOpen && (
+        <div style={{ background: TOKENS.surface, border: `1px solid ${TOKENS.line}`, borderRadius: 12, padding: 14, marginBottom: 16, maxWidth: 360 }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="bt-display" style={{ fontSize: 13, fontWeight: 700, color: TOKENS.textDim, letterSpacing: '0.06em' }}>
+              JOIN ANOTHER LEAGUE
+            </span>
+            <button onClick={() => setJoinBoxOpen(false)} className="p-1 -m-1" style={{ color: TOKENS.textDim }}>
+              <X size={16} />
+            </button>
+          </div>
+          <JoinBox joinCodeInput={joinCodeInput} setJoinCodeInput={setJoinCodeInput} joinMsg={joinMsg} onJoin={handleJoin} />
+        </div>
+      )}
       {photoError && <div style={{ color: TOKENS.loss, fontSize: 12, marginBottom: 12 }}>{photoError}</div>}
 
       {creatingLeague && draftLeague ? (
